@@ -1,6 +1,15 @@
 // index.js
+const http = require('http');
 const { Client, GatewayIntentBits } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
+
+// --- BLOC INDISPENSABLE POUR RENDER ---
+// Ce petit serveur permet à Render de savoir que ton bot est vivant
+http.createServer((req, res) => {
+    res.write("Le bot est en ligne !");
+    res.end();
+}).listen(process.env.PORT || 3000);
+// ---------------------------------------
 
 const client = new Client({
     intents: [
@@ -21,8 +30,12 @@ db.run(`CREATE TABLE IF NOT EXISTS attaques (
     date TEXT
 )`);
 
-// Rôle guilde à ping (ID que tu m’as donné)
+// Rôle guilde à ping
 const roleToPing = "<@&1476632455669743666>";
+
+client.on('ready', () => {
+    console.log(`Connecté en tant que ${client.user.tag}!`);
+});
 
 client.on('messageCreate', (message) => {
     if (message.author.bot) return;
@@ -63,7 +76,8 @@ client.on('messageCreate', (message) => {
             GROUP BY joueur
             ORDER BY total_v DESC
         `, [], (err, rows) => {
-            if (!rows.length) return message.channel.send("Aucune donnée enregistrée.");
+            if (err) return console.error(err.message);
+            if (!rows || !rows.length) return message.channel.send("Aucune donnée enregistrée.");
 
             let reply = "🏆 Classement Guilde :\n\n";
             rows.forEach((row, index) => {
@@ -85,6 +99,7 @@ client.on('messageCreate', (message) => {
             FROM attaques
             WHERE joueur = ?
         `, [joueur], (err, row) => {
+            if (err) return console.error(err.message);
             if (!row || row.total_v === null) return message.channel.send("Aucune stat trouvée pour ce joueur.");
 
             message.channel.send(
