@@ -8,7 +8,7 @@ const sqlite3 = require('sqlite3').verbose();
 // --- SERVEUR RENDER ---
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.write("Bot Perco V3.5 - Commande Reset incluse");
+    res.write("Bot Perco V3.5 - Version Finale Stable");
     res.end();
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
@@ -60,32 +60,27 @@ client.on('ready', () => console.log(`✅ Bot Opérationnel : ${client.user.tag}
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // --- COMMANDE RESET (ADMIN UNIQUEMENT) ---
+    // 1. Commande RESET (Admin uniquement)
     if (message.content === '!reset') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-            return message.reply("❌ Tu n'as pas la permission `Administrateur` pour remettre le tableau à zéro !");
+            return message.reply("❌ Tu n'as pas la permission `Administrateur` !");
         }
-
         db.run(`DELETE FROM attaques`, (err) => {
-            if (err) return message.reply("Erreur lors du reset : " + err.message);
-            const embed = new EmbedBuilder()
-                .setTitle("🔄 Tableau Réinitialisé")
-                .setDescription("Toutes les statistiques ont été remises à zéro pour la nouvelle saison !")
-                .setColor("Orange")
-                .setTimestamp();
-            message.channel.send({ embeds: [embed] });
+            if (err) return message.reply("Erreur : " + err.message);
+            message.channel.send({ embeds: [new EmbedBuilder().setTitle("🔄 Reset").setDescription("Le classement a été remis à zéro !").setColor("Orange")] });
         });
     }
 
-    // Commandes classiques
+    // 2. Commande RESULTAT
     if (message.content === '!resultat' || message.content === '!resulta') {
         sessions.set(message.author.id, { participants: [], cote: null, issue: null, nb_allies: 4 });
         const menu = new ActionRowBuilder().addComponents(
-            new UserSelectMenuBuilder().setCustomId('select_users').setPlaceholder('Sélectionner les joueurs...').setMinValues(1).setMaxValues(4)
+            new UserSelectMenuBuilder().setCustomId('select_users').setPlaceholder('Joueurs...').setMinValues(1).setMaxValues(4)
         );
-        await message.reply({ content: "⚔️ **Nouveau résultat** : Qui a participé au combat ?", components: [menu] });
+        await message.reply({ content: "⚔️ **Nouveau résultat** : Sélectionnez les joueurs :", components: [menu] });
     }
 
+    // 3. Commande CLASSEMENT
     if (message.content === '!classement') {
         const board = await getLeaderboard();
         message.channel.send(board);
@@ -136,11 +131,10 @@ client.on('interactionCreate', async (interaction) => {
 
             const listeNoms = session.participants.map(p => `**${p.name}**`).join(', ');
             const action = session.issue === "Victoire" ? "réalisé une **Victoire**" : "subi une **Défaite**";
-            const phrase = `${listeNoms} vient de ${action} en **${session.cote}** (${session.nb_allies}v4) !`;
-
+            
             const embed = new EmbedBuilder()
                 .setTitle("🚨 Résultat Enregistré")
-                .setDescription(phrase)
+                .setDescription(`${listeNoms} vient de ${action} en **${session.cote}** (${session.nb_allies}v4) !`)
                 .setColor(session.issue === "Victoire" ? "Green" : "Red")
                 .addFields(
                     { name: "🎖️ Points", value: `+${pts.toFixed(2)} pts chacun`, inline: true },
@@ -149,10 +143,11 @@ client.on('interactionCreate', async (interaction) => {
                 .setTimestamp();
 
             await interaction.update({ content: "✅ Stats mises à jour !", components: [], embeds: [embed] });
-            
             const board = await getLeaderboard();
             await interaction.channel.send(board);
             sessions.delete(interaction.user.id);
+        } else {
+            await interaction.update({ content: `Sélection : **${session.cote || '?'}** | **${session.issue || '?'}**` });
         }
     }
 });
