@@ -1,14 +1,14 @@
 const http = require('http');
 const { 
     Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, 
-    ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder 
+    ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder, PermissionFlagsBits 
 } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 
-// --- SERVEUR RENDER (Anti-coupure) ---
+// --- SERVEUR RENDER ---
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.write("Bot Perco V3.4 - Recap Direct Operationnel");
+    res.write("Bot Perco V3.5 - Commande Reset incluse");
     res.end();
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
@@ -34,9 +34,6 @@ db.serialize(() => {
         nb_allies INTEGER,
         date TEXT
     )`);
-    // Vérification des colonnes au cas où
-    const cols = ["joueur_id", "joueur_nom", "points", "issue", "cote", "nb_allies"];
-    cols.forEach(c => db.run(`ALTER TABLE attaques ADD COLUMN ${c} TEXT`, (err) => {}));
 });
 
 const sessions = new Map();
@@ -63,12 +60,26 @@ client.on('ready', () => console.log(`✅ Bot Opérationnel : ${client.user.tag}
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // Commandes de base
-    if (message.content === '!resultat' || message.content === '!resulta') {
-        sessions.set(message.author.id, { 
-            participants: [], cote: null, issue: null, nb_allies: 4 
-        });
+    // --- COMMANDE RESET (ADMIN UNIQUEMENT) ---
+    if (message.content === '!reset') {
+        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+            return message.reply("❌ Tu n'as pas la permission `Administrateur` pour remettre le tableau à zéro !");
+        }
 
+        db.run(`DELETE FROM attaques`, (err) => {
+            if (err) return message.reply("Erreur lors du reset : " + err.message);
+            const embed = new EmbedBuilder()
+                .setTitle("🔄 Tableau Réinitialisé")
+                .setDescription("Toutes les statistiques ont été remises à zéro pour la nouvelle saison !")
+                .setColor("Orange")
+                .setTimestamp();
+            message.channel.send({ embeds: [embed] });
+        });
+    }
+
+    // Commandes classiques
+    if (message.content === '!resultat' || message.content === '!resulta') {
+        sessions.set(message.author.id, { participants: [], cote: null, issue: null, nb_allies: 4 });
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('select_users').setPlaceholder('Sélectionner les joueurs...').setMinValues(1).setMaxValues(4)
         );
@@ -85,7 +96,6 @@ client.on('interactionCreate', async (interaction) => {
     const session = sessions.get(interaction.user.id);
     if (!session) return;
 
-    // 1. Sélection des membres
     if (interaction.isUserSelectMenu()) {
         session.participants = interaction.users.map(u => ({ id: u.id, name: u.username }));
         const rowNb = new ActionRowBuilder().addComponents(
@@ -98,7 +108,6 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.update({ content: "Combien d'alliés étiez-vous ?", components: [rowNb] });
     }
 
-    // 2. Sélection du nombre d'alliés
     if (interaction.isStringSelectMenu() && interaction.customId === 'nb_allies') {
         session.nb_allies = parseInt(interaction.values[0]);
         const r1 = new ActionRowBuilder().addComponents(
@@ -112,13 +121,11 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.update({ content: "Détails du combat :", components: [r1, r2] });
     }
 
-    // 3. Validation Finale par boutons
     if (interaction.isButton()) {
         const id = interaction.customId;
         if (['att', 'def'].includes(id)) session.cote = (id === 'att' ? "Attaque" : "Défense");
         if (['win', 'lose'].includes(id)) session.issue = (id === 'win' ? "Victoire" : "Défaite");
 
-        // Dès qu'on a le côté et l'issue, on enregistre
         if (session.cote && session.issue) {
             let pts = session.issue === "Victoire" ? 1.0 : 0.25;
             if (session.nb_allies < 4) pts += 2.0;
@@ -127,7 +134,6 @@ client.on('interactionCreate', async (interaction) => {
             session.participants.forEach(p => stmt.run(p.id, p.name, pts, session.issue, session.cote, session.nb_allies));
             stmt.finalize();
 
-            // Phrase récapitulative
             const listeNoms = session.participants.map(p => `**${p.name}**`).join(', ');
             const action = session.issue === "Victoire" ? "réalisé une **Victoire**" : "subi une **Défaite**";
             const phrase = `${listeNoms} vient de ${action} en **${session.cote}** (${session.nb_allies}v4) !`;
@@ -147,9 +153,6 @@ client.on('interactionCreate', async (interaction) => {
             const board = await getLeaderboard();
             await interaction.channel.send(board);
             sessions.delete(interaction.user.id);
-        } else {
-            // Mise à jour visuelle simple si un seul bouton est cliqué
-            await interaction.update({ content: `Sélection actuelle : **${session.cote || '?'}** | **${session.issue || '?'}**` });
         }
     }
 });
