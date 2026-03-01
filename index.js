@@ -8,7 +8,7 @@ const sqlite3 = require('sqlite3').verbose();
 // --- SERVEUR RENDER ---
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.write("Bot Perco V3.3 - Recap Nommé");
+    res.write("Bot Perco V3.4 - Recap Direct");
     res.end();
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
@@ -60,53 +60,15 @@ client.on('ready', () => console.log(`✅ Bot Opérationnel : ${client.user.tag}
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    if (message.content === '!resultat') {
+    if (message.content === '!resultat' || message.content === '!resulta') {
         sessions.set(message.author.id, { 
-            participants: [], cote: null, issue: null, nb_allies: 4, step: 'SETUP' 
+            participants: [], cote: null, issue: null, nb_allies: 4 
         });
 
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('select_users').setPlaceholder('Sélectionner les joueurs...').setMinValues(1).setMaxValues(4)
         );
-        await message.reply({ content: "⚔️ **Saisie de résultat** : Qui a participé au combat ?", components: [menu] });
-    }
-
-    // --- ÉTAPE FINALE : RÉCEPTION DU SCREENSHOT ---
-    const session = sessions.get(message.author.id);
-    if (session && session.step === 'WAITING_SCREEN') {
-        if (message.attachments.size > 0) {
-            const screenshot = message.attachments.first().url;
-            
-            let pts = session.issue === "Victoire" ? 1.0 : 0.25;
-            if (session.nb_allies < 4) pts += 2.0;
-
-            const stmt = db.prepare(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_allies, date) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`);
-            session.participants.forEach(p => stmt.run(p.id, p.name, pts, session.issue, session.cote, session.nb_allies));
-            stmt.finalize();
-
-            // --- CONSTRUCTION DE LA PHRASE PERSONNALISÉE ---
-            const listeNoms = session.participants.map(p => `**${p.name}**`).join(', ');
-            const grammaireAction = session.issue === "Victoire" ? "réalisé une **Victoire**" : "subi une **Défaite**";
-            const phraseRecap = `${listeNoms} vient de ${grammaireAction} en **${session.cote}** en **${session.nb_allies}v4** !`;
-
-            const confirmEmbed = new EmbedBuilder()
-                .setTitle("🔥 Résultat Enregistré !")
-                .setDescription(phraseRecap) // Affiche la phrase personnalisée ici
-                .setColor(session.issue === "Victoire" ? "Green" : "Red")
-                .addFields(
-                    { name: "🎖️ Gain", value: `+${pts} pts / joueur`, inline: true },
-                    { name: "📊 Mode", value: `${session.cote} (${session.nb_allies}v4)`, inline: true }
-                )
-                .setImage(screenshot)
-                .setFooter({ text: `Vérifié par ${message.author.username}` })
-                .setTimestamp();
-
-            await message.reply({ content: `✅ Statut mis à jour pour : ${listeNoms}`, embeds: [confirmEmbed] });
-            
-            const board = await getLeaderboard();
-            await message.channel.send(board);
-            sessions.delete(message.author.id);
-        }
+        await message.reply({ content: "⚔️ **Nouveau résultat** : Qui a participé ?", components: [menu] });
     }
 
     if (message.content === '!classement') {
@@ -115,11 +77,11 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// --- GESTION DES MENUS ET BOUTONS ---
 client.on('interactionCreate', async (interaction) => {
     const session = sessions.get(interaction.user.id);
     if (!session) return;
 
+    // 1. Choix des joueurs
     if (interaction.isUserSelectMenu()) {
         session.participants = interaction.users.map(u => ({ id: u.id, name: u.username }));
         const rowNb = new ActionRowBuilder().addComponents(
@@ -129,9 +91,10 @@ client.on('interactionCreate', async (interaction) => {
                 { label: '2 alliés (Bonus +2)', value: '2' }
             ])
         );
-        await interaction.update({ content: "Combien étiez-vous ?", components: [rowNb] });
+        await interaction.update({ content: "Combien d'alliés étiez-vous ?", components: [rowNb] });
     }
 
+    // 2. Choix nombre d'alliés
     if (interaction.isStringSelectMenu() && interaction.customId === 'nb_allies') {
         session.nb_allies = parseInt(interaction.values[0]);
         const r1 = new ActionRowBuilder().addComponents(
@@ -145,18 +108,34 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.update({ content: "Détails du combat :", components: [r1, r2] });
     }
 
+    // 3. Validation finale (Boutons)
     if (interaction.isButton()) {
-        if (['att', 'def'].includes(interaction.customId)) session.cote = interaction.customId === 'att' ? "Attaque" : "Défense";
-        if (['win', 'lose'].includes(interaction.customId)) session.issue = interaction.customId === 'win' ? "Victoire" : "Défaite";
+        const id = interaction.customId;
+        if (['att', 'def'].includes(id)) session.cote = id === 'att' ? "Attaque" : "Défense";
+        if (['win', 'lose'].includes(id)) session.issue = id === 'win' ? "Victoire" : "Défaite";
 
+        // Si on a toutes les infos, on enregistre direct
         if (session.cote && session.issue) {
-            session.step = 'WAITING_SCREEN';
-            await interaction.update({ 
-                content: `📸 **Presque fini !**\nSaisie : **${session.issue}** en **${session.cote}**.\n\n👉 **Envoie maintenant le SCREENSHOT** du combat pour valider.`, 
-                components: [] 
-            });
-        }
-    }
-});
+            let pts = session.issue === "Victoire" ? 1.0 : 0.25;
+            if (session.nb_allies < 4) pts += 2.0;
 
-client.login(process.env.TOKEN);
+            const stmt = db.prepare(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_allies, date) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`);
+            session.participants.forEach(p => stmt.run(p.id, p.name, pts, session.issue, session.cote, session.nb_allies));
+            stmt.finalize();
+
+            // Construction de la phrase récapitulative
+            const listeNoms = session.participants.map(p => `**${p.name}**`).join(', ');
+            const action = session.issue === "Victoire" ? "réalisé une **Victoire**" : "subi une **Défaite**";
+            const phrase = `${listeNoms} vient de ${action} en **${session.cote}** (${session.nb_allies}v4) !`;
+
+            const embed = new EmbedBuilder()
+                .setTitle("🚨 Résultat Enregistré")
+                .setDescription(phrase)
+                .setColor(session.issue === "Victoire" ? "Green" : "Red")
+                .addFields(
+                    { name: "🎖️ Points", value: `+${pts} pts chacun`, inline: true },
+                    { name: "👤 Saisi par", value: interaction.user.username, inline: true }
+                )
+                .setTimestamp();
+
+            await interaction.update({ content: "✅ Stats mises à jour !", components: [],
