@@ -5,14 +5,15 @@ const {
 } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 
-// --- SERVEUR POUR RENDER ---
+// --- SERVEUR DE MONITORING POUR RENDER ---
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.write("Bot Perco V2 - Multi-joueurs & Points");
+    res.write("Bot Perco V2.2 - Connecté et Opérationnel");
     res.end();
 });
-server.listen(process.env.PORT || 3000);
+server.listen(process.env.PORT || 3000, '0.0.0.0');
 
+// --- CONFIGURATION DU BOT ---
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -21,9 +22,14 @@ const client = new Client({
     ]
 });
 
-// BASE DE DONNÉES MISE À JOUR
+const roleToPing = "<@&1476632455669743666>";
+const sessions = new Map();
+
+// --- INITIALISATION DE LA BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
+
 db.serialize(() => {
+    // Création de la table avec la nouvelle structure
     db.run(`CREATE TABLE IF NOT EXISTS attaques (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         joueur_id TEXT,
@@ -31,55 +37,63 @@ db.serialize(() => {
         points INTEGER,
         type TEXT,
         issue TEXT,
+        cote TEXT,
         date TEXT
     )`);
+
+    // Sécurité : Ajout des colonnes si elles manquent dans l'ancien fichier .db
+    const columns = ["joueur_id", "joueur_nom", "points", "issue", "cote"];
+    columns.forEach(col => {
+        db.run(`ALTER TABLE attaques ADD COLUMN ${col} TEXT`, (err) => {
+            // On ignore l'erreur si la colonne existe déjà
+        });
+    });
 });
 
-const roleToPing = "<@&1476632455669743666>";
-const sessions = new Map();
+client.on('ready', () => {
+    console.log(`✅ Bot Opérationnel : ${client.user.tag}`);
+});
 
-client.on('ready', () => console.log(`✅ Bot Opérationnel : ${client.user.tag}`));
-
-// --- LOGIQUE CLASSEMENT ---
-async function generateLeaderboard() {
+// --- FONCTION CLASSEMENT ---
+async function getLeaderboard() {
     return new Promise((resolve) => {
         db.all(`SELECT joueur_nom, SUM(points) as total_pts FROM attaques 
                 GROUP BY joueur_id ORDER BY total_pts DESC LIMIT 10`, [], (err, rows) => {
-            if (err) return resolve("Erreur de chargement du classement.");
-            if (!rows || rows.length === 0) return resolve("Aucune donnée pour le moment.");
+            if (err || !rows || rows.length === 0) return resolve("Aucune donnée enregistrée.");
 
-            let leaderboard = "🏆 **CLASSEMENT GÉNÉRAL (TOP 10)** 🏆\n```\n";
+            let text = "🏆 **CLASSEMENT GÉNÉRAL (TOP 10)** 🏆\n```\n";
             rows.forEach((row, index) => {
-                leaderboard += `${index + 1}. ${row.joueur_nom.padEnd(15)} | ${row.total_pts} pts\n`;
+                text += `${index + 1}. ${row.joueur_nom.padEnd(15)} | ${row.total_pts} pts\n`;
             });
-            leaderboard += "```";
-            resolve(leaderboard);
+            text += "```";
+            resolve(text);
         });
     });
 }
 
+// --- GESTION DES COMMANDES ---
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
     if (message.content === '!classement') {
-        const board = await generateLeaderboard();
-        message.channel.send(board);
+        const board = await getLeaderboard();
+        return message.channel.send(board);
     }
 
     if (message.content === '!attaque') {
         sessions.set(message.author.id, { 
-            cote: null, issue: null, type: null, participants: [] 
+            participants: [], cote: null, issue: null, type: null 
         });
 
         const embed = new EmbedBuilder()
-            .setTitle("⚔️ Nouvelle Saisie - Étape 1 : Équipe")
-            .setDescription("Sélectionnez les membres de la guilde ayant participé.")
-            .setColor("Blue");
+            .setTitle("⚔️ Saisie de combat - Étape 1")
+            .setDescription("Sélectionnez les participants (max 4) via le menu ci-dessous.")
+            .setColor("#5865F2");
 
         const userSelect = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder()
                 .setCustomId('select_users')
-                .setPlaceholder('Ajouter les participants (max 4)')
+                .setPlaceholder('Qui a participé ?')
                 .setMinValues(1)
                 .setMaxValues(4)
         );
@@ -88,81 +102,34 @@ client.on('messageCreate', async (message) => {
     }
 });
 
+// --- GESTION DES INTERACTIONS ---
 client.on('interactionCreate', async (interaction) => {
     const session = sessions.get(interaction.user.id);
-    if (!session && !interaction.customId.startsWith('public_')) return;
+    if (!session && (interaction.isButton() || interaction.isUserSelectMenu())) {
+        if (!interaction.replied) return interaction.reply({ content: "Session expirée. Refaites !attaque.", ephemeral: true });
+        return;
+    }
 
-    // 1. Sélection des membres
+    // Sélection des membres (User Select Menu)
     if (interaction.isUserSelectMenu() && interaction.customId === 'select_users') {
-        session.participants = interaction.users.map(u => ({ id: u.id, username: u.username }));
+        session.participants = interaction.users.map(u => ({ id: u.id, name: u.username }));
         
         const embed = new EmbedBuilder()
             .setTitle("⚔️ Étape 2 : Détails du combat")
-            .setDescription(`Équipe : ${session.participants.map(p => p.username).join(', ')}`)
-            .setColor("Yellow");
+            .setDescription(`**Équipe :** ${session.participants.map(p => p.name).join(', ')}\n\nChoisissez les options :`)
+            .setColor("#FEE75C");
 
-        const rowButtons = new ActionRowBuilder().addComponents(
+        const row1 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('att').setLabel('Attaque').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('def').setLabel('Défense').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('def').setLabel('Défense').setStyle(ButtonStyle.Primary)
+        );
+
+        const row2 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Secondary)
         );
 
-        const rowType = new ActionRowBuilder().addComponents(
+        const row3 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('perco').setLabel('Percepteur').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('prisme').setLabel('Prisme').setStyle(ButtonStyle.Primary)
         );
-
-        await interaction.update({ embeds: [embed], components: [rowButtons, rowType] });
-    }
-
-    // 2. Gestion des boutons et finalisation
-    if (interaction.isButton()) {
-        if (['att', 'def', 'win', 'lose', 'perco', 'prisme'].includes(interaction.customId)) {
-            if (interaction.customId === 'att') session.cote = "Attaque";
-            if (interaction.customId === 'def') session.cote = "Défense";
-            if (interaction.customId === 'win') session.issue = "Victoire";
-            if (interaction.customId === 'lose') session.issue = "Défaite";
-            if (interaction.customId === 'perco') session.type = "Percepteur";
-            if (interaction.customId === 'prisme') session.type = "Prisme";
-
-            if (session.cote && session.issue && session.type) {
-                // CALCUL DES POINTS
-                let pointsBase = session.issue === "Victoire" ? 5 : 2;
-                if (session.type === "Percepteur") pointsBase += 1;
-
-                // Enregistrement de chaque participant
-                const stmt = db.prepare(`INSERT INTO attaques (joueur_id, joueur_nom, points, type, issue, date) VALUES (?, ?, ?, ?, ?, datetime('now'))`);
-                session.participants.forEach(p => {
-                    stmt.run(p.id, p.username, pointsBase, session.type, session.issue);
-                });
-                stmt.finalize();
-
-                const finalEmbed = new EmbedBuilder()
-                    .setTitle(`🚨 Combat Enregistré !`)
-                    .setColor("Green")
-                    .addFields(
-                        { name: "👥 Équipe", value: session.participants.map(p => p.username).join('\n'), inline: true },
-                        { name: "🎖️ Gain", value: `${pointsBase} pts / personne`, inline: true },
-                        { name: "ℹ️ Type", value: `${session.issue} ${session.type} (${session.cote})` }
-                    );
-
-                const leaderboard = await generateLeaderboard();
-                
-                await interaction.update({ 
-                    content: `${roleToPing} **Mise à jour des stats !**`, 
-                    embeds: [finalEmbed], 
-                    components: [] 
-                });
-                
-                // Envoi du nouveau classement juste après
-                await interaction.channel.send(leaderboard);
-                sessions.delete(interaction.user.id);
-            } else {
-                await interaction.update({ content: `Sélection en cours : ${session.cote || '?'} | ${session.issue || '?'} | ${session.type || '?'}` });
-            }
-        }
-    }
-});
-
-client.login(process.env.TOKEN);
