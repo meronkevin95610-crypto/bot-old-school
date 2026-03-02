@@ -7,7 +7,7 @@ const ID_SALON_ARCHIVE = "1477765166467911765";
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V4.8 - Correction System Active");
+    res.end("Bot Perco V4.9 - Ready");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -28,7 +28,7 @@ db.serialize(() => {
 
 const sessions = new Map();
 
-// --- FONCTION CLASSEMENT ---
+// --- FONCTION CLASSEMENT (TOP 15) ---
 async function getLeaderboard(limit = 15) {
     return new Promise((resolve) => {
         const query = `SELECT joueur_nom, COUNT(*) as tc, 
@@ -54,24 +54,30 @@ client.on('ready', () => console.log(`✅ Bot en ligne: ${client.user.tag}`));
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
-    // --- COMMANDE CORRECT (Modifie points ET ratio sans effacer l'historique) ---
+    // --- COMMANDE CORRECT (Ultra Flexible) ---
+    // Usage: !correct @pseudo -1 victoire OU !correct @pseudo win 1.75
     if (m.content.startsWith('!correct')) {
-        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Permission Admin requise.");
+        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Admin uniquement.");
         
-        const args = m.content.split(' ');
         const user = m.mentions.users.first();
-        // On force la première lettre en majuscule pour matcher la base de données
-        let issue = args[2] ? args[2].charAt(0).toUpperCase() + args[2].slice(1).toLowerCase() : "";
-        const pts = parseFloat(args[3]);
+        if (!user) return m.reply("⚠️ Mentionne un joueur !");
 
-        if (!user || !['Victoire', 'Défaite'].includes(issue) || isNaN(pts)) {
-            return m.reply("⚠️ **Usage :** `!correct @joueur [Victoire/Défaite] [points]`\nExemple: `!correct @Pseudo Victoire 1.75` (ou `-1.0` pour retirer)");
+        const content = m.content.toLowerCase();
+        const pointMatch = m.content.match(/-?\d+(\.\d+)?/);
+        const pts = pointMatch ? parseFloat(pointMatch[0]) : null;
+
+        let issue = null;
+        if (content.includes("victoire") || content.includes("win")) issue = "Victoire";
+        if (content.includes("défaite") || content.includes("defaite") || content.includes("loose") || content.includes("lose")) issue = "Défaite";
+
+        if (pts === null || !issue) {
+            return m.reply("⚠️ Syntaxe : `!correct @joueur [points] [Victoire/Défaite]`");
         }
 
         db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, date) VALUES (?, ?, ?, ?, datetime('now'))`, 
         [user.id, user.username, pts, issue], (err) => {
             if (err) return m.reply("❌ Erreur SQL.");
-            m.reply(`✅ **Correction enregistrée pour ${user.username}**\nPoints: \`${pts > 0 ? '+' : ''}${pts}\` | Type: \`${issue}\` (Ratio mis à jour)`);
+            m.reply(`✅ **Correction : ${user.username}**\nPoints: \`${pts > 0 ? '+' : ''}${pts}\` | Type: \`${issue}\``);
         });
     }
 
@@ -81,24 +87,27 @@ client.on('messageCreate', async (m) => {
         const user = m.mentions.users.first();
         if (!user) return m.reply("⚠️ Usage: `!supprimer @joueur`.");
         db.run(`DELETE FROM attaques WHERE joueur_id = ?`, [user.id], () => {
-            m.reply(`🗑️ Historique complet de **${user.username}** supprimé.`);
+            m.reply(`🗑️ Historique de **${user.username}** supprimé.`);
         });
     }
 
-    // --- COMMANDES CLASSIQUES ---
+    // --- COMMANDE RESET AVEC ARCHIVE ---
     if (m.content === '!reset') {
         if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Admin requis.");
         const finalBoard = await getLeaderboard(50); 
         const archiveChannel = client.channels.cache.get(ID_SALON_ARCHIVE);
-        if (archiveChannel) await archiveChannel.send(`📦 **ARCHIVE FIN DE MOIS**\n${finalBoard}`);
-        db.run(`DELETE FROM attaques`, () => m.reply("🔄 Classement archivé et remis à zéro."));
+        if (archiveChannel) await archiveChannel.send(`📦 **ARCHIVE FIN DE MOIS - ${new Date().toLocaleDateString('fr-FR')}**\n${finalBoard}`);
+        
+        db.run(`DELETE FROM attaques`, () => m.reply("🔄 Le classement a été archivé et remis à zéro."));
     }
 
+    // --- CLASSEMENT ---
     if (m.content === '!classement') {
         const b = await getLeaderboard(15);
         return m.reply(b);
     }
 
+    // --- RESULTAT ---
     if (m.content === '!resultat' || m.content === '!resulta') {
         sessions.set(m.author.id, { participants: [], cote: null, issue: null, nb_allies: 4 });
         const menu = new ActionRowBuilder().addComponents(
