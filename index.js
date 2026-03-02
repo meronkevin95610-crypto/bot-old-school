@@ -3,7 +3,7 @@ const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
 const sqlite3 = require('sqlite3').verbose();
 
 // --- CONFIGURATION ---
-const ARCHIVE_CHANNEL_ID = "TON_ID_DE_SALON_ICI"; // ⚠️ METS TON ID ICI
+const ARCHIVE_CHANNEL_ID = "TON_ID_DE_SALON_ICI"; // ⚠️ REMPLACE PAR TON ID DE SALON ARCHIVE
 
 const META_STUFFS = {
     "Cra": {
@@ -84,7 +84,10 @@ client.on('messageCreate', async (m) => {
 
     if (m.content === '!stuff') {
         const row = new ActionRowBuilder().addComponents(
-            new StringSelectMenuBuilder().setCustomId('s_classe').setPlaceholder('🛡️ Choisis ta classe...').addOptions(Object.keys(META_STUFFS).map(c => ({ label: c, value: c })))
+            new StringSelectMenuBuilder()
+                .setCustomId('s_classe')
+                .setPlaceholder('🛡️ Choisis ta classe...')
+                .addOptions(Object.keys(META_STUFFS).map(c => ({ label: c, value: c })))
         );
         return m.reply({ content: "🔎 **Répertoire Meta de la Guilde**", components: [row] });
     }
@@ -94,62 +97,4 @@ client.on('messageCreate', async (m) => {
         return m.channel.send(b);
     }
 
-    if (m.content === '!resultat' || m.content === '!resulta') {
-        sessions.set(m.author.id, { participants: [], cote: null, issue: null, nb_allies: 4 });
-        const menu = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4));
-        return m.reply({ content: "⚔️ **Configuration du combat**", components: [menu] });
-    }
-
-    if (m.content === '!reset' && m.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        db.run(`DELETE FROM attaques`, () => m.reply("🔄 Classement remis à zéro."));
-    }
-});
-
-// --- LOGIQUE INTERACTIONS ---
-client.on('interactionCreate', async (i) => {
-    if (!i.isStringSelectMenu() && !i.isUserSelectMenu() && !i.isButton()) return;
-
-    // GESTION STUFFS
-    if (i.customId === 's_classe') {
-        const classe = i.values[0];
-        const builds = Object.keys(META_STUFFS[classe]);
-        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`s_res_${classe}`).setPlaceholder('✨ Quel mode ?').addOptions(builds.map(b => ({ label: b, value: b }))));
-        return i.update({ content: `✅ Classe : **${classe}**`, components: [row] });
-    }
-
-    if (i.customId.startsWith('s_res_')) {
-        const classe = i.customId.split('_')[2];
-        const build = i.values[0];
-        const data = META_STUFFS[classe][build];
-        const e = new EmbedBuilder().setTitle(`🔥 META : ${classe} - ${build}`).setURL(data.link).setColor('#f39c12').addFields({ name: "📊 Stats", value: `\`${data.stats}\`` }, { name: "📝 Info", value: data.desc }, { name: "🔗 Lien", value: `[Ouvrir Dofusbook](${data.link})` }).setTimestamp();
-        return i.update({ content: "✅ **Build trouvé !**", embeds: [e], components: [] });
-    }
-
-    // GESTION COMBATS (Sessions)
-    const s = sessions.get(i.user.id);
-    if (!s) return;
-
-    if (i.isUserSelectMenu()) {
-        s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
-        const r = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('n').setPlaceholder('2. Format ?').addOptions([{ label: '4 alliés', value: '4', emoji: '👥' }, { label: '3 alliés (+0.75 pts)', value: '3', emoji: '🛡️' }, { label: '2 alliés (+0.75 pts)', value: '2', emoji: '⚔️' }]));
-        return i.update({ content: `✅ Joueurs : **${s.participants.map(p => p.name).join(', ')}**\n👉 Combien d'alliés ?`, components: [r] });
-    }
-
-    if (i.isStringSelectMenu() && i.customId === 'n') {
-        s.nb_allies = parseInt(i.values[0]);
-        const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('att').setLabel('Attaque').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('def').setLabel('Défense').setStyle(ButtonStyle.Primary));
-        const r2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Secondary));
-        return i.update({ content: `✅ Format : **${s.nb_allies}v4**\n👉 Côté et Issue :`, components: [r1, r2] });
-    }
-
-    if (i.isButton()) {
-        if (['att', 'def'].includes(i.customId)) s.cote = i.customId === 'att' ? "Attaque" : "Défense";
-        if (['win', 'lose'].includes(i.customId)) s.issue = i.customId === 'win' ? "Victoire" : "Défaite";
-
-        if (s.cote && s.issue) {
-            let pts = (s.issue === "Victoire" ? 1.0 : 0.25) + (s.nb_allies < 4 ? 0.75 : 0);
-            const stmt = db.prepare(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_allies, date) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`);
-            s.participants.forEach(p => stmt.run(p.id, p.name, pts, s.issue, s.cote, s.nb_allies));
-            stmt.finalize();
-
-            const e = new EmbedBuilder().setTitle("🚨 Résultat Enregistré").setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')} : **${s.issue}** (${s.cote})`).setColor(s.issue === "Victoire" ? "#2ecc71" : "#e74c3c").addFields({ name: "🎖️ Points", value: `+${pts.toFixed(2)} pts`, inline: true }).setTimestamp
+    if (m.content === '!resultat' || m.content
