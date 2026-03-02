@@ -7,7 +7,7 @@ const ID_SALON_ARCHIVE = "1477765166467911765";
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V4.4 - Full Display Fix");
+    res.end("Bot Perco V4.6 - Admin Tools Integrated");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -21,7 +21,6 @@ db.serialize(() => {
     db.run("PRAGMA journal_mode = WAL;");
     db.run(`CREATE TABLE IF NOT EXISTS attaques (id INTEGER PRIMARY KEY AUTOINCREMENT)`);
     
-    // Ajout forcé des colonnes si elles manquent
     const columns = [
         "joueur_id TEXT", "joueur_nom TEXT", "points REAL", 
         "issue TEXT", "cote TEXT", "nb_allies INTEGER", "date TEXT"
@@ -65,6 +64,38 @@ client.on('ready', () => console.log(`✅ Bot en ligne: ${client.user.tag}`));
 
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
+
+    // --- COMMANDE MODIFIER (Admin seulement) ---
+    if (m.content.startsWith('!modifier')) {
+        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Permission Administrateur requise.");
+        
+        const user = m.mentions.users.first();
+        const args = m.content.split(' ');
+        const nouveauxPoints = parseFloat(args[args.length - 1]);
+
+        if (!user || isNaN(nouveauxPoints)) {
+            return m.reply("⚠️ Usage: `!modifier @joueur [points]`\nExemple: `!modifier @Zidrune 15.5` (écrase son score actuel)");
+        }
+
+        // On nettoie l'ancien score et on injecte le nouveau
+        db.run(`DELETE FROM attaques WHERE joueur_id = ?`, [user.id], () => {
+            db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, date) VALUES (?, ?, ?, ?, datetime('now'))`, 
+            [user.id, user.username, nouveauxPoints, "Correction"], () => {
+                m.reply(`✅ Le score de **${user.username}** a été modifié à **${nouveauxPoints.toFixed(2)}** pts.`);
+            });
+        });
+    }
+
+    // --- COMMANDE SUPPRIMER (Admin seulement) ---
+    if (m.content.startsWith('!supprimer')) {
+        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Permission Administrateur requise.");
+        const user = m.mentions.users.first();
+        if (!user) return m.reply("⚠️ Usage: `!supprimer @joueur`.");
+
+        db.run(`DELETE FROM attaques WHERE joueur_id = ?`, [user.id], () => {
+            m.reply(`🗑️ **${user.username}** a été retiré du classement.`);
+        });
+    }
 
     if (m.content === '!reset') {
         if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Admin requis.");
