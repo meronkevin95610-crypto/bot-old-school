@@ -1,18 +1,9 @@
 {
-  "name": "bot-perco",
+  "name": "bot-dofus",
   "version": "1.0.0",
-  "description": "",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "discord.js": "^14.25.1",
+    "discord.js": "^14.14.1",
     "sqlite3": "^5.1.7"
   }
 }
