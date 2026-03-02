@@ -7,7 +7,7 @@ const ID_SALON_ARCHIVE = "1477765166467911765";
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V4.6 - Admin Tools Integrated");
+    res.end("Bot Perco V4.8 - Correction System Active");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -20,19 +20,15 @@ const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
     db.run("PRAGMA journal_mode = WAL;");
     db.run(`CREATE TABLE IF NOT EXISTS attaques (id INTEGER PRIMARY KEY AUTOINCREMENT)`);
-    
-    const columns = [
-        "joueur_id TEXT", "joueur_nom TEXT", "points REAL", 
-        "issue TEXT", "cote TEXT", "nb_allies INTEGER", "date TEXT"
-    ];
+    const columns = ["joueur_id TEXT", "joueur_nom TEXT", "points REAL", "issue TEXT", "cote TEXT", "nb_allies INTEGER", "date TEXT"];
     columns.forEach(col => {
-        db.run(`ALTER TABLE attaques ADD COLUMN ${col}`, (err) => { /* Ignore si existe déjà */ });
+        db.run(`ALTER TABLE attaques ADD COLUMN ${col}`, (err) => {});
     });
 });
 
 const sessions = new Map();
 
-// --- FONCTION CLASSEMENT (TOP 15) ---
+// --- FONCTION CLASSEMENT ---
 async function getLeaderboard(limit = 15) {
     return new Promise((resolve) => {
         const query = `SELECT joueur_nom, COUNT(*) as tc, 
@@ -41,18 +37,11 @@ async function getLeaderboard(limit = 15) {
                        SUM(points) as p 
                        FROM attaques GROUP BY joueur_id ORDER BY p DESC LIMIT ${limit}`;
         db.all(query, [], (err, rows) => {
-            if (err) {
-                console.error("Erreur SQL:", err);
-                return resolve("❌ Erreur lors de la lecture de la base de données.");
-            }
-            if (!rows || rows.length === 0) return resolve("⚠️ Aucune donnée enregistrée pour le moment.");
-            
+            if (err || !rows || rows.length === 0) return resolve("⚠️ Aucune donnée enregistrée.");
             let txt = `🏆 **TOP ${limit} DE LA GUILDE** 🏆\n\`\`\`\nNom            | Cbt | V | D | Pts  | Ratio\n--------------------------------------------\n`;
             rows.forEach(r => {
                 const ratio = r.tc > 0 ? ((r.v / r.tc) * 100).toFixed(0) + "%" : "0%";
-                const nom = (r.joueur_nom || "Inconnu").substring(0, 14).padEnd(14);
-                const pts = (r.p || 0).toFixed(2).padEnd(5);
-                txt += `${nom} | ${String(r.tc).padEnd(3)} | ${r.v} | ${r.d} | ${pts} | ${ratio}\n`;
+                txt += `${(r.joueur_nom || "Inconnu").substring(0, 14).padEnd(14)} | ${String(r.tc).padEnd(3)} | ${r.v} | ${r.d} | ${(r.p || 0).toFixed(2).padEnd(5)} | ${ratio}\n`;
             });
             txt += "```";
             resolve(txt);
@@ -65,45 +54,43 @@ client.on('ready', () => console.log(`✅ Bot en ligne: ${client.user.tag}`));
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
-    // --- COMMANDE MODIFIER (Admin seulement) ---
-    if (m.content.startsWith('!modifier')) {
-        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Permission Administrateur requise.");
+    // --- COMMANDE CORRECT (Modifie points ET ratio sans effacer l'historique) ---
+    if (m.content.startsWith('!correct')) {
+        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Permission Admin requise.");
         
-        const user = m.mentions.users.first();
         const args = m.content.split(' ');
-        const nouveauxPoints = parseFloat(args[args.length - 1]);
+        const user = m.mentions.users.first();
+        // On force la première lettre en majuscule pour matcher la base de données
+        let issue = args[2] ? args[2].charAt(0).toUpperCase() + args[2].slice(1).toLowerCase() : "";
+        const pts = parseFloat(args[3]);
 
-        if (!user || isNaN(nouveauxPoints)) {
-            return m.reply("⚠️ Usage: `!modifier @joueur [points]`\nExemple: `!modifier @Zidrune 15.5` (écrase son score actuel)");
+        if (!user || !['Victoire', 'Défaite'].includes(issue) || isNaN(pts)) {
+            return m.reply("⚠️ **Usage :** `!correct @joueur [Victoire/Défaite] [points]`\nExemple: `!correct @Pseudo Victoire 1.75` (ou `-1.0` pour retirer)");
         }
 
-        // On nettoie l'ancien score et on injecte le nouveau
-        db.run(`DELETE FROM attaques WHERE joueur_id = ?`, [user.id], () => {
-            db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, date) VALUES (?, ?, ?, ?, datetime('now'))`, 
-            [user.id, user.username, nouveauxPoints, "Correction"], () => {
-                m.reply(`✅ Le score de **${user.username}** a été modifié à **${nouveauxPoints.toFixed(2)}** pts.`);
-            });
+        db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, date) VALUES (?, ?, ?, ?, datetime('now'))`, 
+        [user.id, user.username, pts, issue], (err) => {
+            if (err) return m.reply("❌ Erreur SQL.");
+            m.reply(`✅ **Correction enregistrée pour ${user.username}**\nPoints: \`${pts > 0 ? '+' : ''}${pts}\` | Type: \`${issue}\` (Ratio mis à jour)`);
         });
     }
 
-    // --- COMMANDE SUPPRIMER (Admin seulement) ---
+    // --- COMMANDE SUPPRIMER ---
     if (m.content.startsWith('!supprimer')) {
-        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Permission Administrateur requise.");
+        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Admin requis.");
         const user = m.mentions.users.first();
         if (!user) return m.reply("⚠️ Usage: `!supprimer @joueur`.");
-
         db.run(`DELETE FROM attaques WHERE joueur_id = ?`, [user.id], () => {
-            m.reply(`🗑️ **${user.username}** a été retiré du classement.`);
+            m.reply(`🗑️ Historique complet de **${user.username}** supprimé.`);
         });
     }
 
+    // --- COMMANDES CLASSIQUES ---
     if (m.content === '!reset') {
         if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Admin requis.");
         const finalBoard = await getLeaderboard(50); 
         const archiveChannel = client.channels.cache.get(ID_SALON_ARCHIVE);
-        if (archiveChannel) {
-            await archiveChannel.send(`📦 **ARCHIVE FIN DE MOIS**\n${finalBoard}`);
-        }
+        if (archiveChannel) await archiveChannel.send(`📦 **ARCHIVE FIN DE MOIS**\n${finalBoard}`);
         db.run(`DELETE FROM attaques`, () => m.reply("🔄 Classement archivé et remis à zéro."));
     }
 
@@ -129,9 +116,7 @@ client.on('interactionCreate', async (i) => {
         s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
         const r = new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder().setCustomId('n').setPlaceholder('2. Format du combat ?').addOptions([
-                { label: '4 alliés (Normal)', value: '4', emoji: '👥' },
-                { label: '3 alliés (+0.75 pts)', value: '3', emoji: '🛡️' },
-                { label: '2 alliés (+0.75 pts)', value: '2', emoji: '⚔️' }
+                { label: '4 alliés', value: '4' }, { label: '3 alliés (+0.75)', value: '3' }, { label: '2 alliés (+0.75)', value: '2' }
             ])
         );
         return i.update({ content: `✅ Joueurs sélectionnés.\n👉 **Quel était le format ?**`, components: [r] });
@@ -170,12 +155,9 @@ client.on('interactionCreate', async (i) => {
                 .setTimestamp();
 
             await i.update({ content: "✅ **Stats synchronisées.**", components: [], embeds: [e] });
-            
             const b = await getLeaderboard(15);
             await i.channel.send(b);
             sessions.delete(i.user.id);
-        } else {
-            await i.update({ content: `👉 Sélection : **${s.cote || '?'}** | **${s.issue || '?'}**` });
         }
     }
 });
