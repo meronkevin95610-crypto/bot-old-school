@@ -7,7 +7,7 @@ const ID_SALON_ARCHIVE = "1477765166467911765";
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V4.3.1 - Fixed Syntax");
+    res.end("Bot Perco V4.4 - Full Display Fix");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -15,14 +15,25 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
+// --- BASE DE DONNÉES (BLINDÉE) ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
     db.run("PRAGMA journal_mode = WAL;");
-    db.run(`CREATE TABLE IF NOT EXISTS attaques (id INTEGER PRIMARY KEY AUTOINCREMENT, joueur_id TEXT, joueur_nom TEXT, points REAL, issue TEXT, cote TEXT, nb_allies INTEGER, date TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS attaques (id INTEGER PRIMARY KEY AUTOINCREMENT)`);
+    
+    // Ajout forcé des colonnes si elles manquent
+    const columns = [
+        "joueur_id TEXT", "joueur_nom TEXT", "points REAL", 
+        "issue TEXT", "cote TEXT", "nb_allies INTEGER", "date TEXT"
+    ];
+    columns.forEach(col => {
+        db.run(`ALTER TABLE attaques ADD COLUMN ${col}`, (err) => { /* Ignore si existe déjà */ });
+    });
 });
 
 const sessions = new Map();
 
+// --- FONCTION CLASSEMENT (TOP 15) ---
 async function getLeaderboard(limit = 15) {
     return new Promise((resolve) => {
         const query = `SELECT joueur_nom, COUNT(*) as tc, 
@@ -31,11 +42,18 @@ async function getLeaderboard(limit = 15) {
                        SUM(points) as p 
                        FROM attaques GROUP BY joueur_id ORDER BY p DESC LIMIT ${limit}`;
         db.all(query, [], (err, rows) => {
-            if (err || !rows || rows.length === 0) return resolve("⚠️ Aucune donnée enregistrée.");
+            if (err) {
+                console.error("Erreur SQL:", err);
+                return resolve("❌ Erreur lors de la lecture de la base de données.");
+            }
+            if (!rows || rows.length === 0) return resolve("⚠️ Aucune donnée enregistrée pour le moment.");
+            
             let txt = `🏆 **TOP ${limit} DE LA GUILDE** 🏆\n\`\`\`\nNom            | Cbt | V | D | Pts  | Ratio\n--------------------------------------------\n`;
             rows.forEach(r => {
                 const ratio = r.tc > 0 ? ((r.v / r.tc) * 100).toFixed(0) + "%" : "0%";
-                txt += `${(r.joueur_nom || "Inconnu").substring(0, 14).padEnd(14)} | ${String(r.tc).padEnd(3)} | ${r.v} | ${r.d} | ${r.p.toFixed(2).padEnd(5)} | ${ratio}\n`;
+                const nom = (r.joueur_nom || "Inconnu").substring(0, 14).padEnd(14);
+                const pts = (r.p || 0).toFixed(2).padEnd(5);
+                txt += `${nom} | ${String(r.tc).padEnd(3)} | ${r.v} | ${r.d} | ${pts} | ${ratio}\n`;
             });
             txt += "```";
             resolve(txt);
@@ -43,17 +61,17 @@ async function getLeaderboard(limit = 15) {
     });
 }
 
-client.on('ready', () => console.log(`✅ Bot Opérationnel: ${client.user.tag}`));
+client.on('ready', () => console.log(`✅ Bot en ligne: ${client.user.tag}`));
 
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
     if (m.content === '!reset') {
-        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Permission Administrateur requise.");
+        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return m.reply("❌ Admin requis.");
         const finalBoard = await getLeaderboard(50); 
         const archiveChannel = client.channels.cache.get(ID_SALON_ARCHIVE);
         if (archiveChannel) {
-            await archiveChannel.send(`📦 **ARCHIVE FIN DE MOIS - ${new Date().toLocaleDateString('fr-FR')}**\n${finalBoard}`);
+            await archiveChannel.send(`📦 **ARCHIVE FIN DE MOIS**\n${finalBoard}`);
         }
         db.run(`DELETE FROM attaques`, () => m.reply("🔄 Classement archivé et remis à zéro."));
     }
@@ -76,7 +94,7 @@ client.on('interactionCreate', async (i) => {
     const s = sessions.get(i.user.id);
     if (!s) return;
 
-    if (i.isUserSelectMenu()) {
+    if (i.isUserSelectMenu() && i.customId === 'u') {
         s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
         const r = new ActionRowBuilder().addComponents(
             new StringSelectMenuBuilder().setCustomId('n').setPlaceholder('2. Format du combat ?').addOptions([
@@ -85,26 +103,20 @@ client.on('interactionCreate', async (i) => {
                 { label: '2 alliés (+0.75 pts)', value: '2', emoji: '⚔️' }
             ])
         );
-        await i.update({ 
-            content: `✅ Joueurs : **${s.participants.map(p => p.name).join(', ')}**\n👉 Combien d'alliés étiez-vous ?`, 
-            components: [r] 
-        });
+        return i.update({ content: `✅ Joueurs sélectionnés.\n👉 **Quel était le format ?**`, components: [r] });
     }
 
-    if (i.isStringSelectMenu()) {
+    if (i.isStringSelectMenu() && i.customId === 'n') {
         s.nb_allies = parseInt(i.values[0]);
         const r1 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('att').setLabel('Attaque').setStyle(ButtonStyle.Danger).setEmoji('🔥'),
-            new ButtonBuilder().setCustomId('def').setLabel('Défense').setStyle(ButtonStyle.Primary).setEmoji('🛡️')
+            new ButtonBuilder().setCustomId('att').setLabel('Attaque').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('def').setLabel('Défense').setStyle(ButtonStyle.Primary)
         );
         const r2 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success).setEmoji('🏆'),
-            new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Secondary).setEmoji('💀')
+            new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Secondary)
         );
-        await i.update({ 
-            content: `✅ Format : **${s.nb_allies}v4**\n👉 Choisissez le côté et l'issue :`, 
-            components: [r1, r2] 
-        });
+        return i.update({ content: `✅ Format : **${s.nb_allies}v4**\n👉 **Côté et Résultat ?**`, components: [r1, r2] });
     }
 
     if (i.isButton()) {
@@ -121,22 +133,18 @@ client.on('interactionCreate', async (i) => {
 
             const e = new EmbedBuilder()
                 .setTitle("🚨 Résultat Enregistré")
-                .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')} vient de réaliser une **${s.issue}** en **${s.cote}** (${s.nb_allies}v4) !`)
+                .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')} : **${s.issue}** en **${s.cote}** !`)
                 .setColor(s.issue === "Victoire" ? "#2ecc71" : "#e74c3c")
-                .addFields(
-                    { name: "🎖️ Points", value: `+${pts.toFixed(2)} pts chacun`, inline: true },
-                    { name: "👤 Saisi par", value: i.user.username, inline: true }
-                )
+                .addFields({ name: "🎖️ Points", value: `+${pts.toFixed(2)} chacun` })
                 .setTimestamp();
 
-            await i.update({ content: "✅ **Données synchronisées.**", components: [], embeds: [e] });
+            await i.update({ content: "✅ **Stats synchronisées.**", components: [], embeds: [e] });
+            
             const b = await getLeaderboard(15);
             await i.channel.send(b);
             sessions.delete(i.user.id);
         } else {
-            await i.update({ 
-                content: `✅ Participants : **${s.participants.map(p => p.name).join(', ')}**\n✅ Format : **${s.nb_allies}v4**\n👉 Sélection : **${s.cote || '?'}** | **${s.issue || '?'}**` 
-            });
+            await i.update({ content: `👉 Sélection : **${s.cote || '?'}** | **${s.issue || '?'}**` });
         }
     }
 });
