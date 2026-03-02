@@ -1,30 +1,33 @@
+
 const http = require('http');
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder, PermissionFlagsBits } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 
 // --- CONFIGURATION ---
-const ARCHIVE_CHANNEL_ID = "1477765166467911765"; // ✅ ID Configuré pour le salon #classement
+const ARCHIVE_CHANNEL_ID = "1477765166467911765"; 
 
 const META_STUFFS = {
-    "Cra": {
-        "PvM - Multi Do Crit": { link: "https://www.dofusbook.net/fr/equipement/14958422-multi-do-crit/objets", stats: "11/6/6 - 200+ Do Crit", desc: "Le build ultime pour clean tous les donjons du jeu." },
-        "PvP - Terre/Air": { link: "https://www.dofusbook.net/fr/equipement/15234102-terre-air-pvp/objets", stats: "12/6/6 - Gros dégâts/Retrait", desc: "Très fort pour harceler à distance." }
-    },
-    "Iop": {
-        "PvM - Terre Bourrin": { link: "https://www.dofusbook.net/fr/equipement/14852301-iop-terre-pvm/objets", stats: "12/6/3 - 1500 Force", desc: "Optimisé pour maximiser les dégâts de la Colère." },
-        "PvP - Feu Tumulte": { link: "https://www.dofusbook.net/fr/equipement/15100234-iop-feu-pvp/objets", stats: "12/6/6 - Full Intel", desc: "Excellent pour le clean de zone." }
-    },
-    "Ouginak": {
-        "PvP - Eau (Proie)": { link: "https://www.dofusbook.net/fr/equipement/15340912-ougi-eau-pvp/objets", stats: "11/6/6 - Tank/Dégâts", desc: "Le mode le plus solide pour coller au corps à corps." }
-    },
-    "Steamer": {
-        "PvP - Multi Do Crit": { link: "https://www.dofusbook.net/fr/equipement/15410923-steam-multi/objets", stats: "11/6/6 - Embuscade", desc: "Dégâts monstrueux à l'Embuscade." }
-    }
+    "Cra": { emoji: "🏹", stats: "Terre/Air ou Feu", link: "https://www.dofusbook.net/fr/recherche?text=Cra+Touch", desc: "Le roi du farm et du retrait à distance.", image: "https://r2.starry.io/dofus/gfx/illus/Cra.png" },
+    "Ecaflip": { emoji: "🐱", stats: "Multi Do Crit", link: "https://www.dofusbook.net/fr/recherche?text=Ecaflip+Touch", desc: "Dégâts imprévisibles et grosse mobilité.", image: "https://r2.starry.io/dofus/gfx/illus/Ecaflip.png" },
+    "Eniripsa": { emoji: "🧚", stats: "Feu / Soin", link: "https://www.dofusbook.net/fr/recherche?text=Eniripsa+Touch", desc: "Le pilier indispensable pour soigner la team.", image: "https://r2.starry.io/dofus/gfx/illus/Eniripsa.png" },
+    "Enutrof": { emoji: "👴", stats: "Eau / Retrait PM", link: "https://www.dofusbook.net/fr/recherche?text=Enutrof+Touch", desc: "Maître de l'entrave et du drop.", image: "https://r2.starry.io/dofus/gfx/illus/Enutrof.png" },
+    "Feca": { emoji: "🛡️", stats: "Eau / Retrait", link: "https://www.dofusbook.net/fr/recherche?text=Feca+Touch", desc: "Protections massives et contrôle de zone.", image: "https://r2.starry.io/dofus/gfx/illus/Feca.png" },
+    "Iop": { emoji: "⚔️", stats: "Full Terre", link: "https://www.dofusbook.net/fr/recherche?text=Iop+Touch", desc: "Dégâts bruts pour OS un focus rapidement.", image: "https://r2.starry.io/dofus/gfx/illus/Iop.png" },
+    "Osamodas": { emoji: "🐉", stats: "Feu / Air", link: "https://www.dofusbook.net/fr/recherche?text=Osamodas+Touch", desc: "Harcèlement via les invocations.", image: "https://r2.starry.io/dofus/gfx/illus/Osamodas.png" },
+    "Pandawa": { emoji: "🐼", stats: "Tank / Résistances", link: "https://www.dofusbook.net/fr/recherche?text=Pandawa+Touch", desc: "Le meilleur placeur (indispensable en donjon/perco).", image: "https://r2.starry.io/dofus/gfx/illus/Pandawa.png" },
+    "Roublard": { emoji: "💣", stats: "Feu ou Air", link: "https://www.dofusbook.net/fr/recherche?text=Roublard+Touch", desc: "Expert en explosions et murs de bombes.", image: "https://r2.starry.io/dofus/gfx/illus/Roublard.png" },
+    "Sacrieur": { emoji: "🩸", stats: "Air / Tacle", link: "https://www.dofusbook.net/fr/recherche?text=Sacrieur+Touch", desc: "Le sac à PV qui colle ses adversaires.", image: "https://r2.starry.io/dofus/gfx/illus/Sacrieur.png" },
+    "Sadida": { emoji: "🌳", stats: "Terre / Eau", link: "https://www.dofusbook.net/fr/recherche?text=Sadida+Touch", desc: "Entrave PM et propagation de l'état infecté.", image: "https://r2.starry.io/dofus/gfx/illus/Sadida.png" },
+    "Sram": { emoji: "💀", stats: "Terre / Air", link: "https://www.dofusbook.net/fr/recherche?text=Sram+Touch", desc: "Invisibilité et réseaux de pièges mortels.", image: "https://r2.starry.io/dofus/gfx/illus/Sram.png" },
+    "Steamer": { emoji: "🐙", stats: "Terre / Eau", link: "https://www.dofusbook.net/fr/recherche?text=Steamer+Touch", desc: "Polyvalence soin/dégâts avec les tourelles.", image: "https://r2.starry.io/dofus/gfx/illus/Steamer.png" },
+    "Xelor": { emoji: "⏳", stats: "Terre / Eau", link: "https://www.dofusbook.net/fr/recherche?text=Xelor+Touch", desc: "Retrait PA et téléportations.", image: "https://r2.starry.io/dofus/gfx/illus/Xelor.png" },
+    "Zobal": { emoji: "🎭", stats: "Terre / Do Pou", link: "https://www.dofusbook.net/fr/recherche?text=Zobal+Touch", desc: "Boucliers d'équipe et gros dommages de poussée.", image: "https://r2.starry.io/dofus/gfx/illus/Zobal.png" }
 };
 
+// --- SERVEUR WEB ---
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Guilde V5.1 - Stats & Meta Stuffs Actif");
+    res.end("Bot Guilde Dofus Touch V8.5 - Fusion Finale Active");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -32,17 +35,17 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
+// --- BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
     db.run("PRAGMA journal_mode = WAL;");
-    db.run(`CREATE TABLE IF NOT EXISTS attaques (id INTEGER PRIMARY KEY AUTOINCREMENT)`);
-    const cols = ["joueur_id TEXT", "joueur_nom TEXT", "points REAL", "issue TEXT", "cote TEXT", "nb_allies INTEGER", "date TEXT"];
-    cols.forEach(c => db.run(`ALTER TABLE attaques ADD COLUMN ${c}`, (err) => {}));
+    db.run(`CREATE TABLE IF NOT EXISTS attaques (id INTEGER PRIMARY KEY AUTOINCREMENT, joueur_id TEXT, joueur_nom TEXT, points REAL, issue TEXT, cote TEXT, nb_allies INTEGER, date TEXT)`);
 });
 
 const sessions = new Map();
 
-async function getLeaderboard(title = "CLASSEMENT DE LA GUILDE") {
+// --- LOGIQUE CLASSEMENT ---
+async function getLeaderboard(title = "CLASSEMENT GUILDE TOUCH") {
     return new Promise((resolve) => {
         const query = `SELECT joueur_nom, COUNT(*) as tc, SUM(CASE WHEN issue='Victoire' THEN 1 ELSE 0 END) as v, SUM(CASE WHEN issue='Défaite' THEN 1 ELSE 0 END) as d, SUM(points) as p FROM attaques GROUP BY joueur_id ORDER BY p DESC LIMIT 15`;
         db.all(query, [], (err, rows) => {
@@ -58,35 +61,20 @@ async function getLeaderboard(title = "CLASSEMENT DE LA GUILDE") {
     });
 }
 
-async function archiveAndReset() {
-    try {
-        const channel = await client.channels.fetch(ARCHIVE_CHANNEL_ID);
-        if (channel) {
-            const moisNom = new Date().toLocaleString('fr-FR', { month: 'long', year: 'numeric' });
-            const leaderboardTxt = await getLeaderboard(`BILAN MENSUEL : ${moisNom.toUpperCase()}`);
-            await channel.send("💾 **SAUVEGARDE AUTOMATIQUE DU MOIS**");
-            await channel.send(leaderboardTxt);
-            db.run(`DELETE FROM attaques`, () => channel.send("✨ **Classement réinitialisé pour le nouveau mois !**"));
-        }
-    } catch (e) { console.error(e); }
+// --- FONCTIONS MENUS ---
+function getStuffMenu() {
+    const options = Object.entries(META_STUFFS).map(([name, data]) => ({ label: name, value: name, emoji: data.emoji }));
+    const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('s_classe').setPlaceholder('🛡️ Choisis ta classe Touch...').addOptions(options));
+    return { content: "🔎 **Répertoire Visuel des Builds (Touch)**", embeds: [], components: [row] };
 }
 
-setInterval(() => {
-    const now = new Date();
-    if (now.getDate() === 1 && now.getHours() === 0 && now.getMinutes() === 0) archiveAndReset();
-}, 60000);
-
+// --- ÉVÉNEMENTS ---
 client.on('ready', () => console.log(`✅ Bot Opérationnel: ${client.user.tag}`));
 
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
-    if (m.content === '!stuff') {
-        const row = new ActionRowBuilder().addComponents(
-            new StringSelectMenuBuilder().setCustomId('s_classe').setPlaceholder('🛡️ Choisis ta classe...').addOptions(Object.keys(META_STUFFS).map(c => ({ label: c, value: c })))
-        );
-        return m.reply({ content: "🔎 **Répertoire Meta**", components: [row] });
-    }
+    if (m.content === '!stuff') return m.reply(getStuffMenu());
 
     if (m.content === '!classement') {
         const b = await getLeaderboard();
@@ -95,47 +83,54 @@ client.on('messageCreate', async (m) => {
 
     if (m.content === '!resultat' || m.content === '!resulta') {
         sessions.set(m.author.id, { participants: [], cote: null, issue: null, nb_allies: 4 });
-        const menu = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4));
-        return m.reply({ content: "⚔️ **Configuration du combat**", components: [menu] });
+        const menu = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a combattu ?').setMinValues(1).setMaxValues(4));
+        return m.reply({ content: "⚔️ **Enregistrement Combat**", components: [menu] });
     }
 
     if (m.content === '!reset' && m.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        db.run(`DELETE FROM attaques`, () => m.reply("🔄 Classement remis à zéro."));
+        db.run(`DELETE FROM attaques`, () => m.reply("🔄 Le classement a été remis à zéro."));
     }
 });
 
 client.on('interactionCreate', async (i) => {
+    if (i.isButton() && i.customId === 'back_to_stuff') return i.update(getStuffMenu());
+
     if (!i.isStringSelectMenu() && !i.isUserSelectMenu() && !i.isButton()) return;
 
+    // --- INTERACTION STUFF ---
     if (i.customId === 's_classe') {
         const classe = i.values[0];
-        const builds = Object.keys(META_STUFFS[classe]);
-        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`s_res_${classe}`).setPlaceholder('✨ Quel mode ?').addOptions(builds.map(b => ({ label: b, value: b }))));
-        return i.update({ content: `✅ Classe : **${classe}**`, components: [row] });
+        const data = META_STUFFS[classe];
+        const embed = new EmbedBuilder()
+            .setTitle(`${data.emoji} FICHE CLASSE : ${classe.toUpperCase()}`)
+            .setColor('#f39c12')
+            .setThumbnail(data.image)
+            .addFields(
+                { name: "📊 Éléments", value: `\`${data.stats}\``, inline: true },
+                { name: "🔗 Dofusbook", value: `[Voir le stuff](${data.link})`, inline: true },
+                { name: "📝 Conseil", value: data.desc }
+            )
+            .setFooter({ text: "Touch Edition - Cliquez sur le bouton pour revenir au menu" });
+
+        const btnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('back_to_stuff').setLabel('🔙 Retour au menu').setStyle(ButtonStyle.Secondary));
+        return i.update({ content: `✅ **Affichage : ${classe}**`, embeds: [embed], components: [btnRow] });
     }
 
-    if (i.customId.startsWith('s_res_')) {
-        const classe = i.customId.split('_')[2];
-        const build = i.values[0];
-        const data = META_STUFFS[classe][build];
-        const e = new EmbedBuilder().setTitle(`🔥 META : ${classe} - ${build}`).setURL(data.link).setColor('#f39c12').addFields({ name: "📊 Stats", value: `\`${data.stats}\`` }, { name: "📝 Info", value: data.desc }, { name: "🔗 Lien", value: `[Ouvrir Dofusbook](${data.link})` }).setTimestamp();
-        return i.update({ content: "✅ **Build trouvé !**", embeds: [e], components: [] });
-    }
-
+    // --- INTERACTION RÉSULTATS ---
     const s = sessions.get(i.user.id);
     if (!s) return;
 
     if (i.isUserSelectMenu()) {
         s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
-        const r = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('n').setPlaceholder('2. Format ?').addOptions([{ label: '4 alliés', value: '4', emoji: '👥' }, { label: '3 alliés (+0.75 pts)', value: '3', emoji: '🛡️' }, { label: '2 alliés (+0.75 pts)', value: '2', emoji: '⚔️' }]));
-        return i.update({ content: `✅ Joueurs : **${s.participants.map(p => p.name).join(', ')}**\n👉 Combien d'alliés ?`, components: [r] });
+        const r = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('n').setPlaceholder('2. Format du combat ?').addOptions([{ label: '4v4', value: '4' }, { label: '3v4 (+0.75 pts)', value: '3' }, { label: '2v4 (+0.75 pts)', value: '2' }]));
+        return i.update({ content: `✅ Joueurs : **${s.participants.map(p => p.name).join(', ')}**\n👉 Quel format ?`, components: [r] });
     }
 
     if (i.isStringSelectMenu() && i.customId === 'n') {
         s.nb_allies = parseInt(i.values[0]);
         const r1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('att').setLabel('Attaque').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('def').setLabel('Défense').setStyle(ButtonStyle.Primary));
         const r2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Secondary));
-        return i.update({ content: `✅ Format : **${s.nb_allies}v4**\n👉 Côté et Issue :`, components: [r1, r2] });
+        return i.update({ content: `✅ Format : **${s.nb_allies}v4**\n👉 Issue du combat :`, components: [r1, r2] });
     }
 
     if (i.isButton()) {
@@ -148,8 +143,8 @@ client.on('interactionCreate', async (i) => {
             s.participants.forEach(p => stmt.run(p.id, p.name, pts, s.issue, s.cote, s.nb_allies));
             stmt.finalize();
 
-            const e = new EmbedBuilder().setTitle("🚨 Résultat Enregistré").setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')} : **${s.issue}** (${s.cote})`).setColor(s.issue === "Victoire" ? "#2ecc71" : "#e74c3c").addFields({ name: "🎖️ Points", value: `+${pts.toFixed(2)} pts`, inline: true }).setTimestamp();
-            await i.update({ content: "✅ **Stats enregistrées.**", components: [], embeds: [e] });
+            const e = new EmbedBuilder().setTitle("🚨 Combat Enregistré").setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')}\n**${s.issue}** (${s.cote})`).setColor(s.issue === "Victoire" ? "#2ecc71" : "#e74c3c").addFields({ name: "🎖️ Points", value: `+${pts.toFixed(2)} pts` });
+            await i.update({ content: "✅ **Mis à jour !**", components: [], embeds: [e] });
             const b = await getLeaderboard();
             await i.channel.send(b);
             sessions.delete(i.user.id);
