@@ -1,4 +1,4 @@
-﻿const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionFlagsBits } = require('discord.js');
+﻿const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, UserSelectMenuBuilder } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 const http = require('http');
 
@@ -23,11 +23,7 @@ const CLASSES_TOUCH = {
 
 // --- 2. INITIALISATION ---
 const client = new Client({ 
-    intents: [
-        GatewayIntentBits.Guilds, 
-        GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent
-    ] 
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] 
 });
 const db = new sqlite3.Database('./guilde_touch.db');
 
@@ -39,9 +35,9 @@ db.serialize(() => {
 const sessions = new Map();
 
 // --- 3. UPTIME SERVER ---
-http.createServer((req, res) => { res.write("Bot Dofus Touch V10.0 Online"); res.end(); }).listen(process.env.PORT || 3000);
+http.createServer((req, res) => { res.write("Bot Dofus Touch Online"); res.end(); }).listen(process.env.PORT || 3000);
 
-// --- 4. LOGIQUE CLASSEMENT ---
+// --- 4. FONCTIONS ---
 async function showLeaderboard() {
     return new Promise((resolve) => {
         db.all(`SELECT joueur_nom, COUNT(*) as nb, SUM(points) as pts FROM combats GROUP BY joueur_id ORDER BY pts DESC LIMIT 10`, (err, rows) => {
@@ -60,14 +56,14 @@ client.on('ready', () => console.log(`✅ Bot Opérationnel: ${client.user.tag}`
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
+    const options = Object.keys(CLASSES_TOUCH).map(c => ({ label: c, value: c, emoji: CLASSES_TOUCH[c].emoji }));
+
     if (m.content === '!stuff') {
-        const options = Object.keys(CLASSES_TOUCH).map(c => ({ label: c, value: c, emoji: CLASSES_TOUCH[c].emoji }));
-        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('view_c').setPlaceholder('Voir les stuffs...').addOptions(options));
-        return m.reply({ content: "🔎 **Bibliothèque de la Guilde**", components: [row] });
+        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('search_classe').setPlaceholder('Rechercher un stuff...').addOptions(options));
+        return m.reply({ content: "🔎 **Recherche de Stuff Dofus Touch**\nChoisis une classe :", components: [row] });
     }
 
     if (m.content === '!ajouterstuff') {
-        const options = Object.keys(CLASSES_TOUCH).map(c => ({ label: c, value: c, emoji: CLASSES_TOUCH[c].emoji }));
         const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('add_c').setPlaceholder('Quelle classe ?').addOptions(options));
         return m.reply({ content: "📤 **Partage un stuff !**", components: [row] });
     }
@@ -88,6 +84,52 @@ client.on('messageCreate', async (m) => {
 client.on('interactionCreate', async (i) => {
     const userId = i.user.id;
 
+    // --- LOGIQUE RECHERCHE (PA/PM/PO) ---
+    if (i.customId === 'search_classe') {
+        sessions.set(userId, { search: { classe: i.values[0] } });
+        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('search_elem').setPlaceholder('Quel élément ?').addOptions(['Terre', 'Air', 'Feu', 'Eau', 'Multi'].map(e => ({ label: e, value: e }))));
+        return i.update({ content: `✅ Classe : **${i.values[0]}**\nChoisis l'élément :`, components: [row] });
+    }
+
+    if (i.customId === 'search_elem') {
+        sessions.get(userId).search.element = i.values[0];
+        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('search_pa').setPlaceholder('Combien de PA ?').addOptions(['9', '10', '11', '12'].map(v => ({ label: `${v} PA`, value: v }))));
+        return i.update({ content: `✅ Élément : **${i.values[0]}**\nNombre de PA ?`, components: [row] });
+    }
+
+    if (i.customId === 'search_pa') {
+        sessions.get(userId).search.pa = i.values[0];
+        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('search_pm').setPlaceholder('Combien de PM ?').addOptions(['4', '5', '6'].map(v => ({ label: `${v} PM`, value: v }))));
+        return i.update({ content: `✅ PA : **${i.values[0]}**\nNombre de PM ?`, components: [row] });
+    }
+
+    if (i.customId === 'search_pm') {
+        sessions.get(userId).search.pm = i.values[0];
+        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('search_po').setPlaceholder('Combien de PO ?').addOptions(['0', '1', '2', '3', '4', '5', '6'].map(v => ({ label: `${v} PO`, value: v }))));
+        return i.update({ content: `✅ PM : **${i.values[0]}**\nNombre de PO ?`, components: [row] });
+    }
+
+    if (i.customId === 'search_po') {
+        const s = sessions.get(userId).search;
+        s.po = i.values[0];
+        const dbLink = `https://www.dofusbook.net/fr/recherche?text=${s.classe}+${s.element}+${s.pa}pa+${s.pm}pm+${s.po}po+Touch`.replace(/ /g, '+');
+
+        db.all(`SELECT * FROM shared_stuff WHERE classe = ? AND element = ?`, [s.classe, s.element], (err, rows) => {
+            const embed = new EmbedBuilder().setTitle(`🎯 Résultats : ${s.classe} ${s.element}`).setColor('#2ecc71').setThumbnail(CLASSES_TOUCH[s.classe].image);
+            let desc = `**Critères :** ${s.pa} PA | ${s.pm} PM | ${s.po} PO\n\n`;
+            
+            if (rows && rows.length > 0) {
+                desc += "**📦 Builds de la Guilde :**\n" + rows.map(r => `• [${r.mode}](${r.lien}) (par ${r.auteur})`).join('\n');
+            } else {
+                desc += "*Aucun build guilde trouvé. Voici la recherche générale :*";
+            }
+            embed.setDescription(desc);
+            const btn = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Voir sur Dofusbook').setStyle(ButtonStyle.Link).setURL(dbLink));
+            return i.update({ content: null, embeds: [embed], components: [btn] });
+        });
+    }
+
+    // --- LOGIQUE AJOUT ---
     if (i.customId === 'add_c') {
         sessions.set(userId, { classe: i.values[0] });
         const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('add_e').setPlaceholder('Élément ?').addOptions(['Terre', 'Air', 'Feu', 'Eau', 'Multi'].map(e => ({ label: e, value: e }))));
@@ -100,11 +142,13 @@ client.on('interactionCreate', async (i) => {
             new ButtonBuilder().setCustomId('type_PVP').setLabel('PVP').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId('type_PVM').setLabel('PVM').setStyle(ButtonStyle.Success)
         );
-        return i.update({ content: `✅ Élément : **${i.values[0]}**\n3. Quel mode ?`, components: [row] });
+        return i.update({ content: `✅ Élément : **${i.values[0]}**`, components: [row] });
     }
 
     if (i.isButton() && i.customId.startsWith('type_')) {
-        sessions.get(userId).mode = i.customId.split('_')[1];
+        const sess = sessions.get(userId);
+        if (!sess) return;
+        sess.mode = i.customId.split('_')[1];
         const modal = new ModalBuilder().setCustomId('modal_link').setTitle('Lien Dofusbook');
         modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('l').setLabel("Lien du stuff (Touch)").setStyle(TextInputStyle.Short).setRequired(true)));
         return i.showModal(modal);
@@ -115,24 +159,12 @@ client.on('interactionCreate', async (i) => {
         const link = i.fields.getTextInputValue('l');
         db.run(`INSERT INTO shared_stuff (auteur, classe, element, mode, lien) VALUES (?,?,?,?,?)`, [i.user.username, data.classe, data.element, data.mode, link]);
         sessions.delete(userId);
-        return i.reply({ content: `✅ Build **${data.classe}** enregistré !` });
+        return i.reply({ content: `✅ Build enregistré avec succès !` });
     }
 
-    if (i.customId === 'view_c') {
-        const classe = i.values[0];
-        db.all(`SELECT * FROM shared_stuff WHERE classe = ?`, [classe], (err, rows) => {
-            const embed = new EmbedBuilder().setTitle(`💎 Stuffs Guilde : ${classe}`).setThumbnail(CLASSES_TOUCH[classe].image).setColor('#f39c12');
-            if (rows && rows.length > 0) {
-                const pvp = rows.filter(r => r.mode === 'PVP').map(r => `• **${r.element}** : [Lien](${r.lien}) (${r.auteur})`).join('\n') || "Aucun";
-                const pvm = rows.filter(r => r.mode === 'PVM').map(r => `• **${r.element}** : [Lien](${r.lien}) (${r.auteur})`).join('\n') || "Aucun";
-                embed.addFields({ name: "⚔️ PVP", value: pvp }, { name: "🚜 PVM", value: pvm });
-            } else { embed.setDescription("❌ Aucun stuff partagé."); }
-            return i.update({ content: null, embeds: [embed], components: [] });
-        });
-    }
-
+    // --- LOGIQUE COMBAT ---
     if (i.customId === 'combat_users') {
-        sessions.get(userId).participants = i.users.map(u => ({ id: u.id, name: u.username }));
+        sessions.set(userId, { participants: i.users.map(u => ({ id: u.id, name: u.username })) });
         const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('combat_format').setPlaceholder('Format ?').addOptions([{ label: '4v4', value: '4' }, { label: '3v4', value: '3' }, { label: '2v4', value: '2' }]));
         return i.update({ content: `✅ Participants : **${i.users.map(u => u.username).join(', ')}**`, components: [row] });
     }
@@ -148,6 +180,7 @@ client.on('interactionCreate', async (i) => {
 
     if (i.isButton() && i.customId.startsWith('res_')) {
         const s = sessions.get(userId);
+        if (!s || !s.participants) return;
         const win = i.customId === 'res_win';
         const pts = (win ? 1.0 : 0.25) + (s.format < 4 ? 0.75 : 0);
         const stmt = db.prepare(`INSERT INTO combats (joueur_id, joueur_nom, points, issue, type, date) VALUES (?,?,?,?,?, datetime('now'))`);
@@ -160,4 +193,4 @@ client.on('interactionCreate', async (i) => {
 });
 
 // --- 7. CONNEXION ---
-client.login(process.env.TOKEN);
+client.login(process.env.TOKEN).catch(() => console.error("❌ Token Invalide. Vérifie Render !"));
