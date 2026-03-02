@@ -1,8 +1,8 @@
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionFlagsBits } = require('discord.js');
+﻿const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionFlagsBits } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 const http = require('http');
 
-// --- 1. CONFIGURATION & DONNÉES ---
+// --- 1. CONFIGURATION VISUELLE ---
 const CLASSES_TOUCH = {
     "Cra": { emoji: "🏹", image: "https://r2.starry.io/dofus/gfx/illus/Cra.png" },
     "Ecaflip": { emoji: "🐱", image: "https://r2.starry.io/dofus/gfx/illus/Ecaflip.png" },
@@ -21,23 +21,27 @@ const CLASSES_TOUCH = {
     "Zobal": { emoji: "🎭", image: "https://r2.starry.io/dofus/gfx/illus/Zobal.png" }
 };
 
-// --- 2. INITIALISATION BOT & BDD ---
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+// --- 2. INITIALISATION ---
+const client = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent
+    ] 
+});
 const db = new sqlite3.Database('./guilde_touch.db');
 
 db.serialize(() => {
-    // Table pour les scores de combat
     db.run(`CREATE TABLE IF NOT EXISTS combats (id INTEGER PRIMARY KEY AUTOINCREMENT, joueur_id TEXT, joueur_nom TEXT, points REAL, issue TEXT, type TEXT, date TEXT)`);
-    // Table pour le partage de stuff
     db.run(`CREATE TABLE IF NOT EXISTS shared_stuff (id INTEGER PRIMARY KEY AUTOINCREMENT, auteur TEXT, classe TEXT, element TEXT, mode TEXT, lien TEXT)`);
 });
 
-const sessions = new Map(); // Stockage temporaire (Combats et Stuffs)
+const sessions = new Map();
 
-// --- 3. SERVEUR DE MAINTIEN (UPTIME) ---
+// --- 3. UPTIME SERVER ---
 http.createServer((req, res) => { res.write("Bot Dofus Touch V10.0 Online"); res.end(); }).listen(process.env.PORT || 3000);
 
-// --- 4. FONCTION CLASSEMENT ---
+// --- 4. LOGIQUE CLASSEMENT ---
 async function showLeaderboard() {
     return new Promise((resolve) => {
         db.all(`SELECT joueur_nom, COUNT(*) as nb, SUM(points) as pts FROM combats GROUP BY joueur_id ORDER BY pts DESC LIMIT 10`, (err, rows) => {
@@ -50,11 +54,12 @@ async function showLeaderboard() {
     });
 }
 
-// --- 5. GESTION DES COMMANDES ---
+// --- 5. COMMANDES ---
+client.on('ready', () => console.log(`✅ Bot Opérationnel: ${client.user.tag}`));
+
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
-    // --- COMMANDE STUFF ---
     if (m.content === '!stuff') {
         const options = Object.keys(CLASSES_TOUCH).map(c => ({ label: c, value: c, emoji: CLASSES_TOUCH[c].emoji }));
         const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('view_c').setPlaceholder('Voir les stuffs...').addOptions(options));
@@ -64,10 +69,9 @@ client.on('messageCreate', async (m) => {
     if (m.content === '!ajouterstuff') {
         const options = Object.keys(CLASSES_TOUCH).map(c => ({ label: c, value: c, emoji: CLASSES_TOUCH[c].emoji }));
         const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('add_c').setPlaceholder('Quelle classe ?').addOptions(options));
-        return m.reply({ content: "📤 **Partage un stuff avec la guilde !**", components: [row] });
+        return m.reply({ content: "📤 **Partage un stuff !**", components: [row] });
     }
 
-    // --- COMMANDE COMBAT ---
     if (m.content === '!resultat') {
         sessions.set(m.author.id, { participants: [] });
         const menu = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('combat_users').setPlaceholder('Qui a combattu ?').setMinValues(1).setMaxValues(4));
@@ -80,13 +84,12 @@ client.on('messageCreate', async (m) => {
     }
 });
 
-// --- 6. GESTION DES INTERACTIONS ---
+// --- 6. INTERACTIONS ---
 client.on('interactionCreate', async (i) => {
     const userId = i.user.id;
 
-    // --- LOGIQUE AJOUT STUFF ---
     if (i.customId === 'add_c') {
-        sessions.set(userId, { step: 'stuff', classe: i.values[0] });
+        sessions.set(userId, { classe: i.values[0] });
         const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('add_e').setPlaceholder('Élément ?').addOptions(['Terre', 'Air', 'Feu', 'Eau', 'Multi'].map(e => ({ label: e, value: e }))));
         return i.update({ content: `✅ Classe : **${i.values[0]}**`, components: [row] });
     }
@@ -101,8 +104,7 @@ client.on('interactionCreate', async (i) => {
     }
 
     if (i.isButton() && i.customId.startsWith('type_')) {
-        const type = i.customId.split('_')[1];
-        sessions.get(userId).mode = type;
+        sessions.get(userId).mode = i.customId.split('_')[1];
         const modal = new ModalBuilder().setCustomId('modal_link').setTitle('Lien Dofusbook');
         modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('l').setLabel("Lien du stuff (Touch)").setStyle(TextInputStyle.Short).setRequired(true)));
         return i.showModal(modal);
@@ -116,7 +118,6 @@ client.on('interactionCreate', async (i) => {
         return i.reply({ content: `✅ Build **${data.classe}** enregistré !` });
     }
 
-    // --- LOGIQUE VOIR STUFF ---
     if (i.customId === 'view_c') {
         const classe = i.values[0];
         db.all(`SELECT * FROM shared_stuff WHERE classe = ?`, [classe], (err, rows) => {
@@ -124,16 +125,15 @@ client.on('interactionCreate', async (i) => {
             if (rows && rows.length > 0) {
                 const pvp = rows.filter(r => r.mode === 'PVP').map(r => `• **${r.element}** : [Lien](${r.lien}) (${r.auteur})`).join('\n') || "Aucun";
                 const pvm = rows.filter(r => r.mode === 'PVM').map(r => `• **${r.element}** : [Lien](${r.lien}) (${r.auteur})`).join('\n') || "Aucun";
-                embed.addFields({ name: "⚔️ PVP (Perco/Koli)", value: pvp }, { name: "🚜 PVM (Donjon/Farm)", value: pvm });
-            } else { embed.setDescription("❌ Aucun stuff partagé pour cette classe."); }
+                embed.addFields({ name: "⚔️ PVP", value: pvp }, { name: "🚜 PVM", value: pvm });
+            } else { embed.setDescription("❌ Aucun stuff partagé."); }
             return i.update({ content: null, embeds: [embed], components: [] });
         });
     }
 
-    // --- LOGIQUE COMBAT ---
     if (i.customId === 'combat_users') {
         sessions.get(userId).participants = i.users.map(u => ({ id: u.id, name: u.username }));
-        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('combat_format').setPlaceholder('Format ?').addOptions([{ label: '4v4 (Standard)', value: '4' }, { label: '3v4 (+0.75 pts)', value: '3' }, { label: '2v4 (+0.75 pts)', value: '2' }]));
+        const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('combat_format').setPlaceholder('Format ?').addOptions([{ label: '4v4', value: '4' }, { label: '3v4', value: '3' }, { label: '2v4', value: '2' }]));
         return i.update({ content: `✅ Participants : **${i.users.map(u => u.username).join(', ')}**`, components: [row] });
     }
 
@@ -143,22 +143,21 @@ client.on('interactionCreate', async (i) => {
             new ButtonBuilder().setCustomId('res_win').setLabel('Victoire').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('res_lose').setLabel('Défaite').setStyle(ButtonStyle.Secondary)
         );
-        return i.update({ content: `👉 Issue du combat (**${i.values[0]}v4**) ?`, components: [row] });
+        return i.update({ content: `👉 Issue du combat ?`, components: [row] });
     }
 
     if (i.isButton() && i.customId.startsWith('res_')) {
         const s = sessions.get(userId);
         const win = i.customId === 'res_win';
         const pts = (win ? 1.0 : 0.25) + (s.format < 4 ? 0.75 : 0);
-        
         const stmt = db.prepare(`INSERT INTO combats (joueur_id, joueur_nom, points, issue, type, date) VALUES (?,?,?,?,?, datetime('now'))`);
         s.participants.forEach(p => stmt.run(p.id, p.name, pts, win ? 'Victoire' : 'Défaite', `${s.format}v4`));
         stmt.finalize();
-        
         sessions.delete(userId);
         const board = await showLeaderboard();
-        return i.update({ content: `✅ Combat enregistré (+${pts} pts) !`, components: [], embeds: [new EmbedBuilder().setDescription(board).setColor('#2ecc71')] });
+        return i.update({ content: `✅ Combat enregistré !`, components: [], embeds: [new EmbedBuilder().setDescription(board).setColor('#2ecc71')] });
     }
 });
 
-client.login("TON_TOKEN_ICI");
+// --- 7. CONNEXION ---
+client.login(process.env.TOKEN);
