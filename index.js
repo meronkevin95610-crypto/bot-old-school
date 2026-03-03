@@ -1,11 +1,11 @@
 ﻿const http = require('http');
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 
 // --- CONFIGURATION ---
 const ID_SALON_ARCHIVE = "1477765166467911765"; 
 
-// Petit serveur HTTP pour garder le bot en vie sur Render
+// Serveur HTTP pour Render
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end("Bot Perco V5.2.3 - Operationnel");
@@ -113,27 +113,25 @@ client.on('interactionCreate', async (i) => {
     if (!s) return;
 
     try {
-        // ÉTAPE 1 : SÉLECTION DES JOUEURS
+        // ÉTAPE 1 : JOUEURS
         if (i.isUserSelectMenu() && i.customId === 'u') {
             s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
-            
             const r = new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder()
                     .setCustomId('cote')
                     .setPlaceholder('2. Côté du combat ?')
                     .addOptions([
                         { label: 'Attaque', value: 'att', description: 'Vous étiez les assaillants' },
-                        { label: 'Défense', value: 'def', description: 'Vous défendiez un percepteur' }
+                        { label: 'Défense', value: 'def', description: 'Vous défendiez' }
                     ])
             );
             return await i.update({ content: "✅ Joueurs enregistrés.\n👉 **De quel côté étiez-vous ?**", components: [r] });
         }
 
         if (i.isStringSelectMenu()) {
-            // ÉTAPE 2 : CÔTÉ (ATK/DEF)
+            // ÉTAPE 2 : CÔTÉ
             if (i.customId === 'cote') {
                 s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
-                
                 const r = new ActionRowBuilder().addComponents(
                     new StringSelectMenuBuilder()
                         .setCustomId('ennemis')
@@ -147,10 +145,9 @@ client.on('interactionCreate', async (i) => {
                 return await i.update({ content: `Côté : **${s.cote}**\n👉 **Combien d'adversaires y avait-il en face ?**`, components: [r] });
             }
 
-            // ÉTAPE 3 : NOMBRE D'ENNEMIS
+            // ÉTAPE 3 : ENNEMIS
             if (i.customId === 'ennemis') {
                 s.nb_ennemis = parseInt(i.values[0]);
-                
                 const r = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
                     new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Danger)
@@ -159,45 +156,33 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
-        // ÉTAPE 4 : RÉSULTAT FINAL ET ENREGISTREMENT
+        // ÉTAPE 4 : FINALISATION
         if (i.isButton()) {
             if (s.processing) return;
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             s.processing = true;
 
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
-            
-            // Enregistrement SQL
             const stmt = db.prepare(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`);
             
             db.serialize(() => {
-                s.participants.forEach(p => {
-                    stmt.run(p.id, p.name, pts, issue, s.cote, s.nb_ennemis);
-                });
+                s.participants.forEach(p => stmt.run(p.id, p.name, pts, issue, s.cote, s.nb_ennemis));
                 stmt.finalize();
             });
 
-            // Préparation de l'affichage final
             const board = await getLeaderboard(15);
-            const listParticipants = s.participants.map(p => `**${p.name}**`).join(', ');
-
             const embed = new EmbedBuilder()
                 .setTitle("🚨 Résultat de Combat Enregistré")
-                .setDescription(`${listParticipants}\n**${issue}** en **${s.cote}** contre **${s.nb_ennemis}** ennemis.\n🎖️ Points attribués : **+${pts.toFixed(2)}** chacun.`)
+                .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')}\n**${issue}** en **${s.cote}** contre **${s.nb_ennemis}** ennemis.\n🎖️ Points : **+${pts.toFixed(2)}** chacun.`)
                 .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
                 .addFields({ name: "📊 TOP 15 ACTUALISÉ", value: board })
                 .setTimestamp();
 
             await i.update({ content: "✅ **Statistiques synchronisées avec succès.**", components: [], embeds: [embed] });
-            
-            // Nettoyage de la session
             sessions.delete(i.user.id);
         }
     } catch (err) { 
         console.error("Erreur Interaction:", err);
-        if (!i.replied) {
-            await i.followUp({ content: "❌ Une erreur est survenue lors du traitement.", ephemeral: true }).catch(() => {});
-        }
         sessions.delete(i.user.id);
     }
 });
