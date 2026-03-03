@@ -7,7 +7,7 @@ const ID_SALON_ARCHIVE = "1477765166467911765";
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.3.0 - Operationnel");
+    res.end("Bot Perco V5.3.1 - Operationnel");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -28,7 +28,7 @@ db.serialize(() => {
         cote TEXT,
         nb_ennemis INTEGER,
         date TEXT,
-        session_token TEXT -- Nouveau : pour empêcher les doublons physiques
+        session_token TEXT 
     )`);
     db.run(`CREATE TABLE IF NOT EXISTS config (cle TEXT PRIMARY KEY, valeur TEXT)`);
 });
@@ -71,7 +71,7 @@ async function getLeaderboard(limit = 15) {
 
 // --- GESTION MESSAGES ---
 client.on('ready', () => {
-    console.log(`🚀 Bot Perco V5.3.0 prêt | ${client.user.tag}`);
+    console.log(`🚀 Bot Perco V5.3.1 prêt | ${client.user.tag}`);
 });
 
 client.on('messageCreate', async (m) => {
@@ -83,7 +83,6 @@ client.on('messageCreate', async (m) => {
     }
 
     if (m.content === '!resultat' || m.content === '!resulta') {
-        // On génère un ID unique pour cette saisie précise
         const sessionToken = Date.now() + "-" + m.author.id;
         sessions.set(m.author.id, { 
             participants: [], 
@@ -142,54 +141,55 @@ client.on('interactionCreate', async (i) => {
             if (s.processing) return;
             s.processing = true;
 
-            // 1. On "defer" immédiatement pour stopper les boutons
             await i.deferUpdate().catch(() => {});
 
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
-            // 2. On vérifie en DB si ce token existe déjà pour être SÛR (Anti-doublon ultime)
-            db.get("SELECT id FROM attaques WHERE session_token = ?", [s.token], async (err, row) => {
-                if (row) {
-                    console.log("Doublon bloqué par Token.");
-                    return;
-                }
-
-                // 3. Insertion groupée
-                const placeholders = s.participants.map(() => "(?, ?, ?, ?, ?, ?, date('now'), ?)").join(', ');
-                const params = [];
-                s.participants.forEach(p => {
-                    params.push(p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token);
-                });
-
-                const sql = `INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES ${placeholders}`;
-
-                db.run(sql, params, async function(err) {
-                    if (err) {
-                        console.error("Erreur SQL:", err);
-                        return;
-                    }
-
-                    // On récupère le leaderboard APRÈS l'insertion
-                    const board = await getLeaderboard(15);
-                    
-                    const embed = new EmbedBuilder()
-                        .setTitle("🚨 Résultat Enregistré")
-                        .setDescription(`👥 **Participants :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n📝 **Action :** ${issue} en ${s.cote} (${s.nb_ennemis} ennemis)\n🎖️ **Points :** +${pts.toFixed(1)}`)
-                        .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
-                        .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board.length > 1024 ? board.substring(0, 1021) + "..." : board })
-                        .setTimestamp();
-
-                    // 4. Update final
-                    await i.editReply({ 
-                        content: null,
-                        components: [], 
-                        embeds: [embed] 
-                    }).catch(err => console.error("Erreur EditReply:", err));
-
-                    sessions.delete(i.user.id);
-                });
+            // --- SECURITE ANTI-DOUBLON ---
+            const alreadyExists = await new Promise(res => {
+                db.get("SELECT id FROM attaques WHERE session_token = ?", [s.token], (err, row) => res(row));
             });
+
+            if (alreadyExists) {
+                console.log("Doublon bloqué.");
+                return;
+            }
+
+            // --- INSERTION AVEC PROMISE (Plus stable) ---
+            const placeholders = s.participants.map(() => "(?, ?, ?, ?, ?, ?, date('now'), ?)").join(', ');
+            const params = [];
+            s.participants.forEach(p => params.push(p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token));
+
+            const sql = `INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES ${placeholders}`;
+
+            await new Promise((resolve, reject) => {
+                db.run(sql, params, function(err) {
+                    if (err) reject(err);
+                    else resolve();
+                });
+            }).catch(console.error);
+
+            // --- RÉCUPÉRATION DU TABLEAU ---
+            const board = await getLeaderboard(15);
+            
+            // --- CONSTRUCTION DE L'EMBED ---
+            const embed = new EmbedBuilder()
+                .setTitle("🚨 Résultat Enregistré")
+                .setDescription(`👥 **Participants :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n📝 **Action :** ${issue} en ${s.cote}\n🎖️ **Points :** +${pts.toFixed(1)}`)
+                .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
+                // On s'assure que value n'est jamais vide
+                .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board.length > 10 ? board : "⚠️ Données en cours de calcul..." })
+                .setTimestamp();
+
+            // --- ENVOI FINAL ---
+            await i.editReply({ 
+                content: null,
+                components: [], 
+                embeds: [embed] 
+            }).catch(err => console.error("Erreur EditReply:", err));
+
+            sessions.delete(i.user.id);
         }
     } catch (err) { 
         console.error("Erreur Critique Interaction:", err);
