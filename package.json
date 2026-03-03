@@ -1,13 +1,14 @@
-﻿{
+{
   "name": "bot-perco",
-  "version": "5.3.3",
-  "description": "Bot de gestion de statistiques Perco",
+  "version": "5.5.0",
+  "description": "Bot de gestion de statistiques Perco avec archive automatique",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
+    "node-cron": "^3.0.3",
     "sqlite3": "^5.1.7"
   }
 }
