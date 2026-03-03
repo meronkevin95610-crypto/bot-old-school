@@ -5,8 +5,19 @@ const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
 const fs = require('fs');
 
-// --- 1. CONFIGURATION ---
-const config = require('./config.json');
+// --- 1. CONFIGURATION (Adaptée pour Render & Local) ---
+let config = {};
+if (fs.existsSync('./config.json')) {
+    config = require('./config.json');
+} else {
+    config = {
+        tokenGestion: process.env.tokenGestion,
+        tokenPerco: process.env.tokenPerco,
+        clientIdPerco: process.env.clientIdPerco,
+        guildId: process.env.guildId
+    };
+}
+
 const ID_SALON_ARCHIVE = "1477765166467911765";
 
 let percoSettings = { mainChannelId: null, logChannelId: null, pingRoleId: null };
@@ -22,7 +33,7 @@ if (fs.existsSync('./settings.json')) {
 // Serveur Keep-Alive pour Render
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Système Multi-Bot V6.0 - Gestion & Alerte Perco");
+    res.end("Système Multi-Bot V6.0 - Gestion & Alerte Perco Actif");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -30,7 +41,7 @@ server.listen(process.env.PORT || 3000, '0.0.0.0');
 const botGestion = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const botPerco = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-// --- 3. BASE DE DONNÉES (Stats) ---
+// --- 3. BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
     db.run("PRAGMA journal_mode = WAL;");
@@ -73,17 +84,25 @@ botGestion.on('ready', () => console.log(`🚀 Bot Gestion prêt : ${botGestion.
 
 botGestion.on('messageCreate', async (m) => {
     if (m.author.bot) return;
+
     if (m.content === '!top' || m.content === '!classement') {
         const board = await getLeaderboard(15);
         return m.reply(`🏆 **TOP 15 ACTUEL**\n${board}`);
     }
+
+    if (m.content === '!topcomplet') {
+        const board = await getLeaderboard(50);
+        return m.reply(`📊 **CLASSEMENT GÉNÉRAL**\n${board}`);
+    }
+
     if (m.content === '!resultat' || m.content === '!resulta') {
         const token = `ST-${Date.now()}-${m.author.id}`;
         sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, token: token });
+        
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
         );
-        await m.reply({ content: "⚔️ **Configuration du combat**", components: [menu] });
+        await m.reply({ content: "⚔️ **Enregistrement de combat**", components: [menu] });
     }
 });
 
@@ -164,29 +183,33 @@ botPerco.on('ready', async () => {
 });
 
 botPerco.on('interactionCreate', async (i) => {
-    if (i.isChatInputCommand()) {
-        if (i.commandName === 'configurer') {
-            if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: "Admin requis", ephemeral: true });
-            percoSettings.mainChannelId = i.options.getChannel('general')?.id || percoSettings.mainChannelId;
-            percoSettings.logChannelId = i.options.getChannel('logs')?.id || percoSettings.logChannelId;
-            percoSettings.pingRoleId = i.options.getRole('role')?.id || percoSettings.pingRoleId;
-            fs.writeFileSync('./settings.json', JSON.stringify(percoSettings, null, 2));
-            await i.reply({ content: "✅ Configuration mise à jour !", ephemeral: true });
+    try {
+        if (i.isChatInputCommand()) {
+            if (i.commandName === 'configurer') {
+                if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: "Admin requis", ephemeral: true });
+                percoSettings.mainChannelId = i.options.getChannel('general')?.id || percoSettings.mainChannelId;
+                percoSettings.logChannelId = i.options.getChannel('logs')?.id || percoSettings.logChannelId;
+                percoSettings.pingRoleId = i.options.getRole('role')?.id || percoSettings.pingRoleId;
+                fs.writeFileSync('./settings.json', JSON.stringify(percoSettings, null, 2));
+                await i.reply({ content: "✅ Configuration mise à jour !", ephemeral: true });
+            }
+            if (i.commandName === 'setup-bouton') {
+                const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('alerte_perco').setLabel('Attaque Perco').setEmoji('🚨').setStyle(ButtonStyle.Danger));
+                await i.reply({ content: '📌 **Bouton d\'alerte actif.**', components: [row] });
+            }
         }
-        if (i.commandName === 'setup-bouton') {
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('alerte_perco').setLabel('Attaque Perco').setEmoji('🚨').setStyle(ButtonStyle.Danger));
-            await i.reply({ content: '📌 **Bouton d\'alerte actif.**', components: [row] });
-        }
-    }
 
-    if (i.isButton() && i.customId === 'alerte_perco') {
-        const roleMention = percoSettings.pingRoleId ? `<@&${percoSettings.pingRoleId}>` : "@everyone";
-        const msg = `🚨 **ALERTE DÉCLENCHÉE PAR <@${i.user.id}>** 🚨\n\n${roleMention} GO DEF 🔥 Soin / Ero / Bouclier / Placeur 🚨\nS’annoncer en canal guilde, priorité aux optis 🏹`;
-        const chan = botPerco.channels.cache.get(percoSettings.mainChannelId);
-        if (chan) await chan.send(msg);
-        const logChan = botPerco.channels.cache.get(percoSettings.logChannelId);
-        if (logChan) await logChan.send(`🛡️ **LOG :** **${i.user.tag}** a lancé l'alerte.`);
-        await i.reply({ content: 'Alerte envoyée !', ephemeral: true });
+        if (i.isButton() && i.customId === 'alerte_perco') {
+            const roleMention = percoSettings.pingRoleId ? `<@&${percoSettings.pingRoleId}>` : "@everyone";
+            const msg = `🚨 **ALERTE DÉCLENCHÉE PAR <@${i.user.id}>** 🚨\n\n${roleMention} GO DEF 🔥 Soin / Ero / Bouclier / Placeur 🚨\nS’annoncer en canal guilde, priorité aux optis 🏹`;
+            const chan = botPerco.channels.cache.get(percoSettings.mainChannelId);
+            if (chan) await chan.send(msg);
+            const logChan = botPerco.channels.cache.get(percoSettings.logChannelId);
+            if (logChan) await logChan.send(`🛡️ **LOG :** **${i.user.tag}** a lancé l'alerte.`);
+            await i.reply({ content: 'Alerte envoyée !', ephemeral: true });
+        }
+    } catch (err) {
+        console.error(err);
     }
 });
 
