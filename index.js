@@ -5,10 +5,10 @@ const sqlite3 = require('sqlite3').verbose();
 // --- CONFIGURATION ---
 const ID_SALON_ARCHIVE = "1477765166467911765"; 
 
-// Serveur HTTP (V5.2.6)
+// Serveur HTTP pour Render (V5.2.7)
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.2.6 - Operationnel");
+    res.end("Bot Perco V5.2.7 - Operationnel");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -23,7 +23,7 @@ process.on('uncaughtException', (err) => console.error(' [ERREUR] Exception non 
 // --- BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
-    db.run("PRAGMA journal_mode = WAL;");
+    db.run("PRAGMA journal_mode = WAL;"); 
     db.run(`CREATE TABLE IF NOT EXISTS attaques (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         joueur_id TEXT,
@@ -74,7 +74,7 @@ async function getLeaderboard(limit = 15) {
 }
 
 // --- RESET & ARCHIVAGE ---
-async function executerResetMensuel(trigger) {
+async function executerResetMensuel(trigger = null) {
     const channel = await client.channels.fetch(ID_SALON_ARCHIVE).catch(() => null);
     const board = await getLeaderboard(20);
 
@@ -104,7 +104,7 @@ async function checkMonthlyReset() {
 
 // --- GESTION MESSAGES ---
 client.on('ready', () => {
-    console.log(`🚀 Bot Perco V5.2.6 prêt | ${client.user.tag}`);
+    console.log(`🚀 Bot Perco V5.2.7 prêt | ${client.user.tag}`);
     checkMonthlyReset();
     setInterval(checkMonthlyReset, 3600000);
 });
@@ -122,82 +122,4 @@ client.on('messageCreate', async (m) => {
     }
 
     if (m.content === '!resultat' || m.content === '!resulta') {
-        sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false });
-        const menu = new ActionRowBuilder().addComponents(
-            new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
-        );
-        await m.reply({ content: "⚔️ **Configuration du combat**", components: [menu] });
-    }
-});
-
-// --- INTERACTIONS ---
-client.on('interactionCreate', async (i) => {
-    const s = sessions.get(i.user.id);
-    if (!s) return;
-
-    try {
-        if (i.isUserSelectMenu() && i.customId === 'u') {
-            s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
-            const r = new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder().setCustomId('cote').setPlaceholder('2. Côté ?')
-                .addOptions([{ label: 'Attaque', value: 'att' }, { label: 'Défense', value: 'def' }])
-            );
-            return await i.update({ content: "✅ Joueurs enregistrés. 👉 **Attaque ou Défense ?**", components: [r] });
-        }
-
-        if (i.isStringSelectMenu()) {
-            if (i.customId === 'cote') {
-                s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
-                const r = new ActionRowBuilder().addComponents(
-                    new StringSelectMenuBuilder().setCustomId('ennemis').setPlaceholder('3. Ennemis ?')
-                    .addOptions([
-                        { label: '4 Adversaires', value: '4' }, 
-                        { label: '1-3 Adversaires', value: '1' }, 
-                        { label: '0 Adversaire', value: '0' }
-                    ])
-                );
-                return await i.update({ content: `Côté : **${s.cote}** 👉 **Combien d'adversaires ?**`, components: [r] });
-            }
-            if (i.customId === 'ennemis') {
-                s.nb_ennemis = parseInt(i.values[0]);
-                const r = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Danger)
-                );
-                return await i.update({ content: `Opposition : **${s.nb_ennemis}** 👉 **Verdict ?**`, components: [r] });
-            }
-        }
-
-        if (i.isButton()) {
-            if (s.processing) return;
-            s.processing = true;
-            const issue = i.customId === 'win' ? "Victoire" : "Défaite";
-            const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
-
-            const queries = s.participants.map(p => {
-                return new Promise((res) => {
-                    db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES (?, ?, ?, ?, ?, ?, date('now'))`, 
-                    [p.id, p.name, pts, issue, s.cote, s.nb_ennemis], res);
-                });
-            });
-
-            await Promise.all(queries); 
-
-            const board = await getLeaderboard(15);
-            const embed = new EmbedBuilder()
-                .setTitle("🚨 Résultat Enregistré")
-                .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')}\n**${issue}** en **${s.cote}** contre **${s.nb_ennemis}**.\n🎖️ Points : **+${pts.toFixed(2)}**`)
-                .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
-                .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board })
-                .setTimestamp();
-
-            await i.update({ content: "✅ Statistiques synchronisées.", components: [], embeds: [embed] });
-            sessions.delete(i.user.id);
-        }
-    } catch (err) { 
-        console.error(err);
-        sessions.delete(i.user.id);
-    }
-});
-
-client.login(process.env.TOKEN);
+        sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis
