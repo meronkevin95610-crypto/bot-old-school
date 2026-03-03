@@ -3,13 +3,16 @@ const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
 const sqlite3 = require('sqlite3').verbose();
 
 // --- 1. SÉCURITÉ ---
-process.on('SIGTERM', () => { db.close(); process.exit(0); });
+process.on('SIGTERM', () => { 
+    if (db) db.close(); 
+    process.exit(0); 
+});
 
 // --- 2. CONFIGURATION & SERVEUR ---
 const ID_SALON_ARCHIVE = "1477765166467911765"; 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.3.5 - Connecté");
+    res.end("Bot Perco V5.3.6 - Operationnel");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -75,6 +78,7 @@ client.on('ready', () => { console.log(`🚀 Bot prêt | ${client.user.tag}`); }
 
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
+
     if (m.content === '!resultat' || m.content === '!resulta') {
         const token = `ST-${Date.now()}-${m.author.id}`;
         sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, token: token });
@@ -129,24 +133,27 @@ client.on('interactionCreate', async (i) => {
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
-            // --- INSERTION POUR TOUS LES JOUEURS ---
             const placeholders = s.participants.map(() => "(?, ?, ?, ?, ?, ?, date('now'), ?)").join(', ');
             const params = [];
             s.participants.forEach(p => params.push(p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token));
 
             db.run(`INSERT OR IGNORE INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES ${placeholders}`, params, async function(err) {
-                if (err) return console.error(err);
+                if (err) {
+                    console.error(err);
+                    return sessions.delete(i.user.id);
+                }
 
                 setTimeout(async () => {
                     const board = await getLeaderboard(15);
                     const embed = new EmbedBuilder()
                         .setTitle("📝 RÉCAPITULATIF DU COMBAT")
-                        .setDescription(`👥 **Participants :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n⚔️ **Type :** ${issue} en ${s.cote} (${s.nb_ennemis} ennemis)\n🎖️ **Gain :** \`+${pts.toFixed(1)} points\``)
+                        .setDescription(`👥 **Participants :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n⚔️ **Type :** ${issue} en ${s.cote} (${s.nb_ennemis} ennemis)\n🎖️ **Gain :** \`+${pts.toFixed(1)} points par joueur\``)
                         .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
                         .addFields({ name: "🏆 TOP 15 - CLASSEMENT GÉNÉRAL", value: board })
                         .setTimestamp();
 
                     await i.editReply({ content: null, components: [], embeds: [embed] });
+                    
                     const archive = client.channels.cache.get(ID_SALON_ARCHIVE);
                     if (archive) await archive.send({ embeds: [embed] }).catch(() => {});
                     
@@ -154,7 +161,10 @@ client.on('interactionCreate', async (i) => {
                 }, 500);
             });
         }
-    } catch (err) { console.error(err); sessions.delete(i.user.id); }
+    } catch (err) { 
+        console.error(err); 
+        sessions.delete(i.user.id); 
+    }
 });
 
 client.login(process.env.TOKEN);
