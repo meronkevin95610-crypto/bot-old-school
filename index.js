@@ -1,13 +1,15 @@
 const http = require('http');
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder, PermissionFlagsBits } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
 
-// --- CONFIGURATION ---
+// --- 1. CONFIGURATION & SÉCURITÉ ---
 const ID_SALON_ARCHIVE = "1477765166467911765"; 
+process.on('SIGTERM', () => { if (db) db.close(); process.exit(0); });
+
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.5.5 - Fix Multi-Joueurs");
+    res.end("Bot Perco V5.6.0 - Full Auto & Multi-Fix");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -15,7 +17,7 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// --- BASE DE DONNÉES ---
+// --- 2. BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
     db.run("PRAGMA journal_mode = WAL;"); 
@@ -34,6 +36,7 @@ db.serialize(() => {
 
 const sessions = new Map();
 
+// --- 3. LOGIQUE DE CALCUL ---
 function calculerPoints(cote, issue, ennemis) {
     if (issue === "Défaite") return (cote === "Défense") ? 1.0 : 0.0; 
     if (ennemis === 0) return 0.25; 
@@ -41,10 +44,9 @@ function calculerPoints(cote, issue, ennemis) {
     return (ennemis === 4) ? 4.0 : 2.0;
 }
 
-// --- MOTEUR DE LEADERBOARD ---
+// --- 4. MOTEUR DE LEADERBOARD ---
 async function getLeaderboard(limit = 50) {
     return new Promise((resolve) => {
-        // On regroupe par joueur_id ET joueur_nom pour éviter les fusions d'ID
         const query = `SELECT joueur_nom, 
                        SUM(points) as p, 
                        COUNT(*) as total 
@@ -55,7 +57,7 @@ async function getLeaderboard(limit = 50) {
         
         db.all(query, [], (err, rows) => {
             if (err) return resolve("⚠️ Erreur SQL.");
-            if (!rows || rows.length === 0) return resolve("⚠️ Aucun joueur dans le tableau.");
+            if (!rows || rows.length === 0) return resolve("⚠️ Aucun joueur dans le classement.");
 
             let txt = "```\nNom            | Pts   | Combats\n--------------------------------\n";
             rows.forEach(r => {
@@ -70,17 +72,56 @@ async function getLeaderboard(limit = 50) {
     });
 }
 
-// --- ÉVÉNEMENTS ---
-client.on('ready', () => { console.log(`🚀 Bot prêt | V5.5.5`); });
+// --- 5. TÂCHE AUTOMATIQUE (FIN DE MOIS) ---
+cron.schedule('59 23 28-31 * *', async () => {
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    if (tomorrow.getDate() === 1) {
+        const archive = client.channels.cache.get(ID_SALON_ARCHIVE);
+        if (archive) {
+            const fullBoard = await getLeaderboard(50);
+            const embed = new EmbedBuilder()
+                .setTitle("📅 CLASSEMENT FINAL DU MOIS")
+                .setDescription(fullBoard)
+                .setColor("#f1c40f")
+                .setFooter({ text: "Archive de fin de mois - Reset effectué" })
+                .setTimestamp();
+            
+            await archive.send({ content: "@everyone 🚨 **CLASSEMENT FINAL !** Les compteurs repartent à zéro.", embeds: [embed] });
+            db.run("DELETE FROM attaques");
+        }
+    }
+});
+
+// --- 6. ÉVÉNEMENTS & COMMANDES ---
+client.on('ready', () => { console.log(`🚀 Bot prêt | V5.6.0`); });
 
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
-    if (m.content === '!top' || m.content === '!classement' || m.content === '!topcomplet') {
-        const board = await getLeaderboard(50); 
-        return m.reply(`📊 **CLASSEMENT GÉNÉRAL**\n${board}`);
+    // Affiche le Top 15 (Prestige)
+    if (m.content === '!top' || m.content === '!classement') {
+        const board = await getLeaderboard(15); 
+        return m.reply(`🏆 **TOP 15 ACTUEL**\n${board}`);
     }
 
+    // Affiche le Top 50 (Vérification complète)
+    if (m.content === '!topcomplet') {
+        const board = await getLeaderboard(50); 
+        return m.reply(`📊 **CLASSEMENT GÉNÉRAL (TOUS LES JOUEURS)**\n${board}`);
+    }
+
+    // Commande de nettoyage (Admin uniquement)
+    if (m.content === '!nettoyer-stats') {
+        if (!m.member.permissions.has(PermissionFlagsBits.Administrator)) return;
+        db.run("DELETE FROM attaques", (err) => {
+            if (!err) return m.reply("✅ Toutes les statistiques ont été réinitialisées.");
+        });
+    }
+
+    // Enregistrement de combat
     if (m.content === '!resultat' || m.content === '!resulta') {
         const token = `ST-${Date.now()}-${m.author.id}`;
         sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, token: token });
@@ -97,7 +138,6 @@ client.on('interactionCreate', async (i) => {
 
     try {
         if (i.isUserSelectMenu() && i.customId === 'u') {
-            // Sauvegarde bien l'ID unique de chaque membre sélectionné
             s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
             const r = new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder().setCustomId('cote').setPlaceholder('2. Côté ?')
@@ -136,7 +176,7 @@ client.on('interactionCreate', async (i) => {
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
-            // BOUCLE D'INSERTION INDIVIDUELLE (Plus sûr que l'insertion groupée)
+            // Insertion robuste joueur par joueur
             for (const p of s.participants) {
                 await new Promise((resolve) => {
                     db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) 
@@ -146,10 +186,10 @@ client.on('interactionCreate', async (i) => {
             }
 
             setTimeout(async () => {
-                const board = await getLeaderboard(50); 
+                const board = await getLeaderboard(50); // Récapitulatif large pour être sûr de voir tout le monde
                 const embed = new EmbedBuilder()
-                    .setTitle("📝 RÉCAPITULATIF")
-                    .setDescription(`👥 **Equipe :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n🎖️ **Gain :** \`+${pts.toFixed(1)} pts\``)
+                    .setTitle("📝 RÉCAPITULATIF DU COMBAT")
+                    .setDescription(`👥 **Equipe :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n⚔️ **Verdict :** ${issue} (${s.cote})\n🎖️ **Gain :** \`+${pts.toFixed(1)} pts / joueur\``)
                     .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
                     .addFields({ name: "🏆 CLASSEMENT ACTUEL", value: board })
                     .setTimestamp();
