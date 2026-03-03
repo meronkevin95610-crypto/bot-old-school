@@ -2,10 +2,19 @@ const http = require('http');
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder, PermissionFlagsBits, SlashCommandBuilder, Routes } = require('discord.js');
 const { REST } = require('@discordjs/rest');
 const sqlite3 = require('sqlite3').verbose();
-const cron = require('node-cron');
 const fs = require('fs');
 
-// --- 1. CONFIGURATION (Adaptée pour Render & Local) ---
+// --- 1. SERVEUR HTTP (Priorité n°1 pour Render) ---
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end("Système Multi-Bot V6.0 - En ligne");
+});
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`📡 Serveur Keep-Alive actif sur le port ${PORT}`);
+});
+
+// --- 2. CONFIGURATION ---
 let config = {};
 if (fs.existsSync('./config.json')) {
     config = require('./config.json');
@@ -24,22 +33,9 @@ let percoSettings = { mainChannelId: null, logChannelId: null, pingRoleId: null 
 if (fs.existsSync('./settings.json')) {
     try {
         const data = fs.readFileSync('./settings.json', 'utf8');
-        if (data.trim() !== "" && data.trim() !== "{}") {
-            percoSettings = JSON.parse(data);
-        }
+        if (data.trim()) percoSettings = JSON.parse(data);
     } catch (e) { console.log("Initialisation settings..."); }
 }
-
-// Serveur Keep-Alive pour Render
-const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Système Multi-Bot V6.0 - Gestion & Alerte Perco Actif");
-});
-server.listen(process.env.PORT || 3000, '0.0.0.0');
-
-// --- 2. INITIALISATION DES CLIENTS ---
-const botGestion = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
-const botPerco = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 // --- 3. BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
@@ -54,7 +50,11 @@ db.serialize(() => {
 
 const sessions = new Map();
 
-// --- 4. FONCTIONS GESTION ---
+// --- 4. INITIALISATION DES CLIENTS ---
+const botGestion = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+const botPerco = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+
+// --- 5. LOGIQUE BOT GESTION ---
 function calculerPoints(cote, issue, ennemis) {
     if (issue === "Défaite") return (cote === "Défense") ? 1.0 : 0.0;
     if (ennemis === 0) return 0.25;
@@ -79,26 +79,17 @@ async function getLeaderboard(limit = 15) {
     });
 }
 
-// --- 5. LOGIQUE BOT GESTION (!top, !resultat) ---
 botGestion.on('ready', () => console.log(`🚀 Bot Gestion prêt : ${botGestion.user.tag}`));
 
 botGestion.on('messageCreate', async (m) => {
     if (m.author.bot) return;
-
     if (m.content === '!top' || m.content === '!classement') {
         const board = await getLeaderboard(15);
         return m.reply(`🏆 **TOP 15 ACTUEL**\n${board}`);
     }
-
-    if (m.content === '!topcomplet') {
-        const board = await getLeaderboard(50);
-        return m.reply(`📊 **CLASSEMENT GÉNÉRAL**\n${board}`);
-    }
-
     if (m.content === '!resultat' || m.content === '!resulta') {
         const token = `ST-${Date.now()}-${m.author.id}`;
         sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, token: token });
-        
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
         );
@@ -109,7 +100,6 @@ botGestion.on('messageCreate', async (m) => {
 botGestion.on('interactionCreate', async (i) => {
     const s = sessions.get(i.user.id);
     if (!s) return;
-
     if (i.isUserSelectMenu() && i.customId === 'u') {
         s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
         const r = new ActionRowBuilder().addComponents(
@@ -118,7 +108,6 @@ botGestion.on('interactionCreate', async (i) => {
         );
         return await i.update({ content: `✅ **${s.participants.length} joueurs** sélectionnés. 👉 **Côté ?**`, components: [r] });
     }
-
     if (i.isStringSelectMenu() && i.customId === 'cote') {
         s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
         const r = new ActionRowBuilder().addComponents(
@@ -127,7 +116,6 @@ botGestion.on('interactionCreate', async (i) => {
         );
         return await i.update({ content: `Côté : **${s.cote}**. 👉 **Nombre d'ennemis ?**`, components: [r] });
     }
-
     if (i.isStringSelectMenu() && i.customId === 'ennemis') {
         s.nb_ennemis = parseInt(i.values[0]);
         const r = new ActionRowBuilder().addComponents(
@@ -136,20 +124,15 @@ botGestion.on('interactionCreate', async (i) => {
         );
         return await i.update({ content: `Combat vs **${s.nb_ennemis}**. 👉 **Verdict ?**`, components: [r] });
     }
-
     if (i.isButton() && (i.customId === 'win' || i.customId === 'lose')) {
         if (s.processing) return;
         s.processing = true;
         await i.deferUpdate();
-
         const issue = i.customId === 'win' ? "Victoire" : "Défaite";
         const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
-
         for (const p of s.participants) {
-            db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES (?,?,?,?,?,?,date('now'),?)`, 
-            [p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token]);
+            db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES (?,?,?,?,?,?,date('now'),?)`, [p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token]);
         }
-
         setTimeout(async () => {
             const board = await getLeaderboard(15);
             const embed = new EmbedBuilder()
@@ -157,16 +140,15 @@ botGestion.on('interactionCreate', async (i) => {
                 .setDescription(`👥 **Team :** ${s.participants.map(p => p.name).join(', ')}\n⚔️ **Verdict :** ${issue} (${s.cote})\n🎖️ **Gain :** \`+${pts.toFixed(1)} pts\``)
                 .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
                 .addFields({ name: "🏆 CLASSEMENT", value: board });
-
             await i.editReply({ content: null, components: [], embeds: [embed] });
             const archive = botGestion.channels.cache.get(ID_SALON_ARCHIVE);
-            if (archive) archive.send({ embeds: [embed] });
+            if (archive) archive.send({ embeds: [embed] }).catch(() => {});
             sessions.delete(i.user.id);
         }, 1000);
     }
 });
 
-// --- 6. LOGIQUE BOT PERCO (Alerte Bouton Rouge) ---
+// --- 6. LOGIQUE BOT PERCO ---
 const percoCommands = [
     new SlashCommandBuilder().setName('configurer').setDescription('Paramètres alerte').addChannelOption(o => o.setName('general').setDescription('Salon Alerte')).addChannelOption(o => o.setName('logs').setDescription('Salon Logs')).addRoleOption(o => o.setName('role').setDescription('Rôle à pinger')),
     new SlashCommandBuilder().setName('setup-bouton').setDescription('Affiche le bouton d\'alerte')
@@ -176,10 +158,8 @@ botPerco.on('ready', async () => {
     try {
         const rest = new REST({ version: '10' }).setToken(config.tokenPerco);
         await rest.put(Routes.applicationCommands(config.clientIdPerco), { body: percoCommands });
-        console.log(`✅ Bot Perco prêt : ${botPerco.user.tag} (Commandes Globales)`);
-    } catch (error) {
-        console.error("❌ Erreur Slash Commands :", error);
-    }
+        console.log(`✅ Bot Perco prêt : ${botPerco.user.tag}`);
+    } catch (error) { console.error("❌ Erreur Slash Commands :", error); }
 });
 
 botPerco.on('interactionCreate', async (i) => {
@@ -198,7 +178,6 @@ botPerco.on('interactionCreate', async (i) => {
                 await i.reply({ content: '📌 **Bouton d\'alerte actif.**', components: [row] });
             }
         }
-
         if (i.isButton() && i.customId === 'alerte_perco') {
             const roleMention = percoSettings.pingRoleId ? `<@&${percoSettings.pingRoleId}>` : "@everyone";
             const msg = `🚨 **ALERTE DÉCLENCHÉE PAR <@${i.user.id}>** 🚨\n\n${roleMention} GO DEF 🔥 Soin / Ero / Bouclier / Placeur 🚨\nS’annoncer en canal guilde, priorité aux optis 🏹`;
@@ -208,11 +187,9 @@ botPerco.on('interactionCreate', async (i) => {
             if (logChan) await logChan.send(`🛡️ **LOG :** **${i.user.tag}** a lancé l'alerte.`);
             await i.reply({ content: 'Alerte envoyée !', ephemeral: true });
         }
-    } catch (err) {
-        console.error(err);
-    }
+    } catch (err) { console.error(err); }
 });
 
 // --- 7. CONNEXION ---
-botGestion.login(config.tokenGestion);
-botPerco.login(config.tokenPerco);
+botGestion.login(config.tokenGestion).catch(err => console.error("Erreur Login Gestion:", err));
+botPerco.login(config.tokenPerco).catch(err => console.error("Erreur Login Perco:", err));
