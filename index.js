@@ -1,29 +1,45 @@
 const http = require('http');
 const fs = require('fs');
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder, PermissionFlagsBits, SlashCommandBuilder, Routes, AttachmentBuilder } = require('discord.js');
-const { REST } = require('@discordjs/rest');
+const { 
+    Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, 
+    ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, 
+    AttachmentBuilder 
+} = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 
-// --- Configuration ---
+// --- 1. CONFIGURATION ET VARIABLES ---
 const config = {
     tokenGestion: process.env.tokenGestion,
-    tokenPerco: process.env.tokenPerco,
-    clientIdPerco: process.env.clientIdPerco,
-    guildId: process.env.guildId,
-    urlRender: process.env.urlRender,
-    adminId: "TON_ID_DISCORD" // Remplace par ton ID Discord pour les commandes sensibles
+    urlRender: process.env.urlRender || `https://ton-projet.onrender.com`,
+    adminId: "TON_ID_DISCORD_ICI" // <--- METS TON ID ICI (ex: "1234567890")
 };
 
 const db = new sqlite3.Database('./database.sqlite');
 const sessions = new Map();
 
-// --- 4. LOGIQUE BOT GESTION ---
-const botGestion = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+// --- 2. SERVEUR HTTP (ESSENTIEL POUR RENDER) ---
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is Live!');
+});
 
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`🚀 Serveur actif sur le port ${PORT}`));
+
+// --- 3. INITIALISATION DU BOT ---
+const botGestion = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent
+    ] 
+});
+
+// --- 4. GESTION DES MESSAGES (!commandes) ---
 botGestion.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
-    // --- COMMANDE : RESULTAT ---
+    // A. Commande de résultat
     if (m.content === '!resultat' || m.content === '!resulta') {
         const token = `ST-${Date.now()}-${m.author.id}`;
         sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, session_token: token });
@@ -31,71 +47,73 @@ botGestion.on('messageCreate', async (m) => {
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
         );
-        m.reply({ content: "🏆 **Nouveau résultat de combat**\nSélectionnez les participants :", components: [menu] });
+        m.reply({ content: "🏆 **Nouveau combat**\nSélectionnez les participants :", components: [menu] });
     }
 
-    // --- COMMANDE : BACKUP (Sauvegarde et Envoi du fichier) ---
+    // B. Commande de Backup (Envoi de la DB en message privé)
     if (m.content === '!backup-classement') {
-        if (m.author.id !== config.adminId) return m.reply("❌ Permission refusée.");
+        if (m.author.id !== config.adminId) return m.reply("❌ Seul l'administrateur peut faire ça.");
 
-        const fileName = `./backup_classement_${Date.now()}.sqlite`;
-        
-        // Copie du fichier pour s'assurer qu'il n'est pas "lock" par SQLite
-        fs.copyFile('./database.sqlite', fileName, async (err) => {
-            if (err) return m.reply("❌ Erreur lors de la création du fichier backup.");
-
-            const attachment = new AttachmentBuilder(fileName);
+        const tempFile = `./backup_${Date.now()}.sqlite`;
+        fs.copyFile('./database.sqlite', tempFile, async (err) => {
+            if (err) return m.reply("❌ Erreur lors de la copie de la base.");
+            
             try {
-                await m.author.send({ content: "📂 Voici la sauvegarde de la base de données :", files: [attachment] });
-                m.reply("✅ Sauvegarde effectuée ! Le fichier vous a été envoyé en MP.");
+                const attachment = new AttachmentBuilder(tempFile);
+                await m.author.send({ content: "📂 Voici ta sauvegarde SQLite :", files: [attachment] });
+                m.reply("✅ Sauvegarde envoyée en message privé !");
             } catch (e) {
-                m.reply("❌ Impossible de vous envoyer le MP. Vérifiez vos paramètres de confidentialité.");
+                m.reply("❌ Impossible de t'envoyer un MP. Vérifie tes paramètres.");
             } finally {
-                // Supprime le fichier temporaire du serveur après envoi
-                if (fs.existsSync(fileName)) fs.unlinkSync(fileName);
+                if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
             }
         });
     }
 
-    // --- COMMANDE : RESET (Nettoyage complet) ---
+    // C. Commande de Reset (Avec Confirmation)
     if (m.content === '!reset-classement') {
         if (m.author.id !== config.adminId) return m.reply("❌ Permission refusée.");
 
-        db.serialize(() => {
-            db.run(`DELETE FROM attaques`, (err) => {
-                if (err) return m.reply("❌ Erreur lors du nettoyage.");
-                
-                // Reset du compteur d'ID
-                db.run(`DELETE FROM sqlite_sequence WHERE name='attaques'`);
-                
-                m.reply("⚠️ **Le classement a été réinitialisé.** Toutes les données ont été effacées.");
-                console.log(`🧹 Reset effectué par ${m.author.tag}`);
-            });
+        const confirmRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('confirm_reset').setLabel('CONFIRMER LE RESET').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('cancel_reset').setLabel('ANNULER').setStyle(ButtonStyle.Secondary)
+        );
+
+        m.reply({ 
+            content: "⚠️ **ATTENTION** : Voulez-vous vraiment effacer TOUT le classement ? Cette action est irréversible.", 
+            components: [confirmRow] 
         });
     }
 });
 
-// --- 5. LOGIQUE INTERACTION (Enregistrement des données) ---
+// --- 5. GESTION DES INTERACTIONS (BOUTONS / MENUS) ---
 botGestion.on('interactionCreate', async (i) => {
-    if (!i.isButton() && !i.isUserSelectMenu()) return;
+    // Gestion du Reset
+    if (i.customId === 'confirm_reset') {
+        if (i.user.id !== config.adminId) return i.reply({ content: "Non autorisé.", ephemeral: true });
+        
+        db.serialize(() => {
+            db.run(`DELETE FROM attaques`);
+            db.run(`DELETE FROM sqlite_sequence WHERE name='attaques'`);
+        });
+        return i.update({ content: "✅ Le classement a été réinitialisé à zéro.", components: [] });
+    }
+    
+    if (i.customId === 'cancel_reset') {
+        return i.update({ content: "❌ Réinitialisation annulée.", components: [] });
+    }
+
+    // Gestion du menu de sélection des participants (Ton code actuel)
     const s = sessions.get(i.user.id);
     if (!s || s.processing) return;
 
-    // Logique de sélection des participants et calcul...
-    // (Garde ton code actuel ici pour la gestion des points et l'INSERT)
-    // N'oublie pas d'utiliser s.session_token comme dans ton dernier diff.
+    if (i.isUserSelectMenu() && i.customId === 'u') {
+        s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
+        // Suite de ta logique d'enregistrement ici...
+        await i.reply({ content: `Participants enregistrés : ${s.participants.length}`, ephemeral: true });
+    }
 });
 
-// --- 7. AUTO-PING (Anti-Sommeil Render) ---
-const URL_PING = config.urlRender || `https://ton-projet.onrender.com`; 
+// --- 6. AUTO-PING (ANTI-SOMMEIL RENDER) ---
 setInterval(() => {
-    if (!URL_PING.includes("ton-projet")) {
-        http.get(URL_PING, (res) => {
-            console.log(`⚓ Auto-ping : Statut ${res.statusCode}`);
-        }).on('error', (e) => console.error("❌ Erreur Ping:", e.message));
-    }
-}, 8 * 60 * 1000); 
-
-// --- 8. CONNEXION ---
-botGestion.login(config.tokenGestion);
-// botPerco.login(config.tokenPerco); // Si tu l'utilises toujours
+    if (!config.urlRender.includes("
