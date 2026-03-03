@@ -23,7 +23,7 @@ if (fs.existsSync('./config.json')) {
 }
 
 const ID_SALON_ARCHIVE = "1477765166467911765";
-const ADMIN_ID = "1476632455669743666"; // <--- Ton ID Discord intégré ici
+const ADMIN_ID = "1476632455669743666"; // Ton ID Discord configuré
 
 let percoSettings = { mainChannelId: null, logChannelId: null, pingRoleId: null };
 if (fs.existsSync('./settings.json')) {
@@ -129,7 +129,6 @@ botGestion.on('messageCreate', async (m) => {
 });
 
 botGestion.on('interactionCreate', async (i) => {
-    // Gestion du Reset
     if (i.customId === 'confirm_reset') {
         if (i.user.id !== ADMIN_ID) return i.reply({ content: "❌ Seul l'administrateur peut confirmer.", ephemeral: true });
         db.serialize(() => {
@@ -213,4 +212,36 @@ botPerco.on('ready', async () => {
         const rest = new REST({ version: '10' }).setToken(config.tokenPerco);
         await rest.put(Routes.applicationCommands(config.clientIdPerco), { body: percoCommands });
         console.log(`✅ Bot Perco prêt : ${botPerco.user.tag}`);
+    } catch (error) { console.error("Erreur REST Perco:", error); }
+});
+
+botPerco.on('interactionCreate', async (i) => {
+    if (i.isChatInputCommand()) {
+        if (i.commandName === 'configurer') {
+            if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: "Admin requis", ephemeral: true });
+            percoSettings.mainChannelId = i.options.getChannel('general')?.id || percoSettings.mainChannelId;
+            percoSettings.logChannelId = i.options.getChannel('logs')?.id || percoSettings.logChannelId;
+            percoSettings.pingRoleId = i.options.getRole('role')?.id || percoSettings.pingRoleId;
+            fs.writeFileSync('./settings.json', JSON.stringify(percoSettings, null, 2));
+            await i.reply({ content: "✅ Configuration mise à jour !", ephemeral: true });
+        }
+        if (i.commandName === 'setup-bouton') {
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('alerte_perco').setLabel('Attaque Perco').setEmoji('🚨').setStyle(ButtonStyle.Danger));
+            await i.reply({ content: '📌 **Bouton d\'alerte actif.**', components: [row] });
+        }
     }
+
+    if (i.isButton() && i.customId === 'alerte_perco') {
+        const roleMention = percoSettings.pingRoleId ? `<@&${percoSettings.pingRoleId}>` : "@everyone";
+        const msg = `🚨 **ALERTE DÉCLENCHÉE PAR <@${i.user.id}>** 🚨\n\n${roleMention} GO DEF 🔥 Soin / Ero / Bouclier / Placeur 🚨\nS’annoncer en canal guilde, priorité aux optis 🏹`;
+        const chan = botPerco.channels.cache.get(percoSettings.mainChannelId);
+        if (chan) await chan.send(msg);
+        const logChan = botPerco.channels.cache.get(percoSettings.logChannelId);
+        if (logChan) await logChan.send(`🛡️ **LOG :** **${i.user.tag}** a lancé l'alerte.`);
+        await i.reply({ content: 'Alerte envoyée !', ephemeral: true });
+    }
+});
+
+// --- 7. CONNEXION ---
+botGestion.login(config.tokenGestion);
+botPerco.login(config.tokenPerco);
