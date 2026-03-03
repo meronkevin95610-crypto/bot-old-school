@@ -8,7 +8,7 @@ const ID_SALON_ARCHIVE = "1477765166467911765";
 // Serveur HTTP (V5.2.6)
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.2.6 - Operationnel"); // Change la version ici pour verifier sur Render
+    res.end("Bot Perco V5.2.6 - Operationnel");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -137,4 +137,67 @@ client.on('interactionCreate', async (i) => {
 
     try {
         if (i.isUserSelectMenu() && i.customId === 'u') {
-            s.participants
+            s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
+            const r = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder().setCustomId('cote').setPlaceholder('2. Côté ?')
+                .addOptions([{ label: 'Attaque', value: 'att' }, { label: 'Défense', value: 'def' }])
+            );
+            return await i.update({ content: "✅ Joueurs enregistrés. 👉 **Attaque ou Défense ?**", components: [r] });
+        }
+
+        if (i.isStringSelectMenu()) {
+            if (i.customId === 'cote') {
+                s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
+                const r = new ActionRowBuilder().addComponents(
+                    new StringSelectMenuBuilder().setCustomId('ennemis').setPlaceholder('3. Ennemis ?')
+                    .addOptions([
+                        { label: '4 Adversaires', value: '4' }, 
+                        { label: '1-3 Adversaires', value: '1' }, 
+                        { label: '0 Adversaire', value: '0' }
+                    ])
+                );
+                return await i.update({ content: `Côté : **${s.cote}** 👉 **Combien d'adversaires ?**`, components: [r] });
+            }
+            if (i.customId === 'ennemis') {
+                s.nb_ennemis = parseInt(i.values[0]);
+                const r = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Danger)
+                );
+                return await i.update({ content: `Opposition : **${s.nb_ennemis}** 👉 **Verdict ?**`, components: [r] });
+            }
+        }
+
+        if (i.isButton()) {
+            if (s.processing) return;
+            s.processing = true;
+            const issue = i.customId === 'win' ? "Victoire" : "Défaite";
+            const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
+
+            const queries = s.participants.map(p => {
+                return new Promise((res) => {
+                    db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES (?, ?, ?, ?, ?, ?, date('now'))`, 
+                    [p.id, p.name, pts, issue, s.cote, s.nb_ennemis], res);
+                });
+            });
+
+            await Promise.all(queries); 
+
+            const board = await getLeaderboard(15);
+            const embed = new EmbedBuilder()
+                .setTitle("🚨 Résultat Enregistré")
+                .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')}\n**${issue}** en **${s.cote}** contre **${s.nb_ennemis}**.\n🎖️ Points : **+${pts.toFixed(2)}**`)
+                .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
+                .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board })
+                .setTimestamp();
+
+            await i.update({ content: "✅ Statistiques synchronisées.", components: [], embeds: [embed] });
+            sessions.delete(i.user.id);
+        }
+    } catch (err) { 
+        console.error(err);
+        sessions.delete(i.user.id);
+    }
+});
+
+client.login(process.env.TOKEN);
