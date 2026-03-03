@@ -8,7 +8,7 @@ const ID_SALON_ARCHIVE = "1477765166467911765";
 // Serveur HTTP pour Render
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.2.8 - Operationnel");
+    res.end("Bot Perco V5.2.9 - Operationnel");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -104,7 +104,7 @@ async function checkMonthlyReset() {
 
 // --- GESTION MESSAGES ---
 client.on('ready', () => {
-    console.log(`🚀 Bot Perco V5.2.8 prêt | ${client.user.tag}`);
+    console.log(`🚀 Bot Perco V5.2.9 prêt | ${client.user.tag}`);
     checkMonthlyReset();
     setInterval(checkMonthlyReset, 3600000);
 });
@@ -130,7 +130,7 @@ client.on('messageCreate', async (m) => {
     }
 });
 
-// --- INTERACTIONS CORRIGÉES ---
+// --- INTERACTIONS ---
 client.on('interactionCreate', async (i) => {
     const s = sessions.get(i.user.id);
     if (!s) return;
@@ -172,36 +172,45 @@ client.on('interactionCreate', async (i) => {
             if (s.processing) return;
             s.processing = true;
 
-            await i.deferUpdate(); // BLOQUE l'interaction
+            await i.deferUpdate(); 
 
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
-            const queries = s.participants.map(p => {
-                return new Promise((res, rej) => {
-                    db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES (?, ?, ?, ?, ?, ?, date('now'))`, 
-                    [p.id, p.name, pts, issue, s.cote, s.nb_ennemis], (err) => {
-                        if (err) rej(err); else res();
-                    });
-                });
+            // --- INSERTION UNIQUE ET INSTANTANÉE ---
+            const placeholders = s.participants.map(() => "(?, ?, ?, ?, ?, ?, date('now'))").join(', ');
+            const params = [];
+            s.participants.forEach(p => {
+                params.push(p.id, p.name, pts, issue, s.cote, s.nb_ennemis);
             });
 
-            await Promise.all(queries);
+            const sql = `INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES ${placeholders}`;
 
-            // Délai de sécurité pour SQLite
-            await new Promise(resolve => setTimeout(resolve, 150));
+            db.run(sql, params, async function(err) {
+                if (err) {
+                    console.error("Erreur SQL:", err);
+                    s.processing = false;
+                    return;
+                }
 
-            const board = await getLeaderboard(15);
-            
-            const embed = new EmbedBuilder()
-                .setTitle("🚨 Résultat Enregistré")
-                .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')}\n**${issue}** en **${s.cote}** contre **${s.nb_ennemis}**.\n🎖️ Points : **+${pts.toFixed(2)}**`)
-                .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
-                .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board || "Chargement..." })
-                .setTimestamp();
+                // Lecture immédiate après le succès de l'écriture
+                const board = await getLeaderboard(15);
+                
+                const embed = new EmbedBuilder()
+                    .setTitle("🚨 Résultat Enregistré")
+                    .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')}\n**${issue}** en **${s.cote}** contre **${s.nb_ennemis}**.\n🎖️ Points : **+${pts.toFixed(2)}**`)
+                    .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
+                    .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board || "Actualisation..." })
+                    .setTimestamp();
 
-            await i.editReply({ content: "✅ Statistiques synchronisées.", components: [], embeds: [embed] });
-            sessions.delete(i.user.id);
+                await i.editReply({ 
+                    content: "✅ Statistiques synchronisées.", 
+                    components: [], 
+                    embeds: [embed] 
+                }).catch(() => {});
+
+                sessions.delete(i.user.id);
+            });
         }
     } catch (err) { 
         console.error("Erreur Interaction:", err);
