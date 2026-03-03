@@ -1,4 +1,13 @@
-node_modules
-*.db
-*.log
+# Base de données (très important)
+stats.db
+stats.db-wal
+stats.db-shm
+
+# Modules Node
+node_modules/
+
+# Variables d'environnement (Token, etc)
 .env
+
+# Logs
+npm-debug.log*
