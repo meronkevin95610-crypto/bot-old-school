@@ -2,29 +2,14 @@ const http = require('http');
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 
-// --- 1. SÉCURITÉ ANTI-DOUBLON D'INSTANCE ---
-process.on('SIGTERM', () => {
-    console.log("Fermeture propre de l'instance...");
-    db.close();
-    process.exit(0);
-});
+// --- 1. SÉCURITÉ ---
+process.on('SIGTERM', () => { db.close(); process.exit(0); });
 
 // --- 2. CONFIGURATION & SERVEUR ---
 const ID_SALON_ARCHIVE = "1477765166467911765"; 
-
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.3.4 - Operationnel");
-});
-
-server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
-        console.log('⚠️ Port occupé. Tentative de reconnexion...');
-        setTimeout(() => {
-            server.close();
-            server.listen(process.env.PORT || 3000);
-        }, 1000);
-    }
+    res.end("Bot Perco V5.3.5 - Connecté");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -32,7 +17,7 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// --- 3. BASE DE DONNÉES (MODE WAL) ---
+// --- 3. BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
     db.run("PRAGMA journal_mode = WAL;"); 
@@ -69,7 +54,7 @@ async function getLeaderboard(limit = 15) {
                        SUM(points) as p FROM attaques GROUP BY joueur_id ORDER BY p DESC LIMIT ${limit}`;
         
         db.all(query, [], (err, rows) => {
-            if (err || !rows || rows.length === 0) return resolve("⚠️ Aucune donnée enregistrée.");
+            if (err || !rows || rows.length === 0) return resolve("⚠️ Aucune donnée.");
             let txt = "```\nNom            | Pts   | Atk | Def | %\n---------------------------------------\n";
             rows.forEach(r => {
                 const ratio = r.tc > 0 ? Math.round((r.v / r.tc) * 100) + "%" : "0%";
@@ -86,24 +71,13 @@ async function getLeaderboard(limit = 15) {
 }
 
 // --- 6. ÉVÉNEMENTS ---
-client.on('ready', () => {
-    console.log(`🚀 Bot Perco V5.3.4 prêt | ${client.user.tag}`);
-});
+client.on('ready', () => { console.log(`🚀 Bot prêt | ${client.user.tag}`); });
 
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
-
-    if (m.content === '!classement') {
-        const board = await getLeaderboard(15);
-        return m.reply(`🏆 **CLASSEMENT ACTUEL**\n${board}`);
-    }
-
     if (m.content === '!resultat' || m.content === '!resulta') {
         const token = `ST-${Date.now()}-${m.author.id}`;
-        sessions.set(m.author.id, { 
-            participants: [], cote: null, nb_ennemis: 4, processing: false, token: token 
-        });
-        
+        sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, token: token });
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
         );
@@ -128,64 +102,59 @@ client.on('interactionCreate', async (i) => {
         if (i.isStringSelectMenu() && i.customId === 'cote') {
             s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
             const r = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder().setCustomId('ennemis').setPlaceholder('3. Combien d\'ennemis ?')
+                .addOptions([
+                    { label: '4 Ennemis (Full)', value: '4' },
+                    { label: '1 à 3 Ennemis', value: '3' },
+                    { label: '0 Ennemis (Abandon)', value: '0' }
+                ])
+            );
+            return await i.update({ content: `Côté : **${s.cote}**. 👉 **Nombre d'ennemis ?**`, components: [r] });
+        }
+
+        if (i.isStringSelectMenu() && i.customId === 'ennemis') {
+            s.nb_ennemis = parseInt(i.values[0]);
+            const r = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Danger)
             );
-            return await i.update({ content: `Côté : **${s.cote}** 👉 **Verdict ?**`, components: [r] });
+            return await i.update({ content: `Combat contre **${s.nb_ennemis}** ennemis. 👉 **Verdict ?**`, components: [r] });
         }
 
         if (i.isButton()) {
             if (s.processing) return;
             s.processing = true;
-
             await i.deferUpdate();
 
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
+            // --- INSERTION POUR TOUS LES JOUEURS ---
             const placeholders = s.participants.map(() => "(?, ?, ?, ?, ?, ?, date('now'), ?)").join(', ');
             const params = [];
             s.participants.forEach(p => params.push(p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token));
 
-            const sql = `INSERT OR IGNORE INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES ${placeholders}`;
-
-            db.run(sql, params, async function(err) {
-                if (err) {
-                    console.error("Erreur SQL:", err);
-                    return;
-                }
+            db.run(`INSERT OR IGNORE INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES ${placeholders}`, params, async function(err) {
+                if (err) return console.error(err);
 
                 setTimeout(async () => {
                     const board = await getLeaderboard(15);
-                    
-                    const recap = [
-                        `👥 **Participants :** ${s.participants.map(p => `**${p.name}**`).join(', ')}`,
-                        `⚔️ **Type :** ${issue} en ${s.cote}`,
-                        `🎖️ **Gain :** \`+${pts.toFixed(1)} points\``
-                    ].join('\n');
-
-                    const finalEmbed = new EmbedBuilder()
+                    const embed = new EmbedBuilder()
                         .setTitle("📝 RÉCAPITULATIF DU COMBAT")
-                        .setDescription(recap)
+                        .setDescription(`👥 **Participants :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n⚔️ **Type :** ${issue} en ${s.cote} (${s.nb_ennemis} ennemis)\n🎖️ **Gain :** \`+${pts.toFixed(1)} points\``)
                         .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
                         .addFields({ name: "🏆 TOP 15 - CLASSEMENT GÉNÉRAL", value: board })
                         .setTimestamp();
 
-                    await i.editReply({ content: null, components: [], embeds: [finalEmbed] });
-
-                    const archiveChannel = client.channels.cache.get(ID_SALON_ARCHIVE);
-                    if (archiveChannel) {
-                        await archiveChannel.send({ embeds: [finalEmbed] }).catch(() => {});
-                    }
-
+                    await i.editReply({ content: null, components: [], embeds: [embed] });
+                    const archive = client.channels.cache.get(ID_SALON_ARCHIVE);
+                    if (archive) await archive.send({ embeds: [embed] }).catch(() => {});
+                    
                     sessions.delete(i.user.id);
-                }, 500); 
+                }, 500);
             });
         }
-    } catch (err) {
-        console.error("Erreur interaction:", err);
-        sessions.delete(i.user.id);
-    }
+    } catch (err) { console.error(err); sessions.delete(i.user.id); }
 });
 
 client.login(process.env.TOKEN);
