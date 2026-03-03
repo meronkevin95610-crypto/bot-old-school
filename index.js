@@ -34,23 +34,18 @@ db.serialize(() => {
         nb_ennemis INTEGER,
         date TEXT
     )`);
+    // Table pour stocker le mois du dernier reset
+    db.run(`CREATE TABLE IF NOT EXISTS config (cle TEXT PRIMARY KEY, valeur TEXT)`);
 });
 
 const sessions = new Map();
 
-// --- LOGIQUE METIER (BARÈME V5.2) ---
+// --- LOGIQUE METIER ---
 function calculerPoints(cote, issue, ennemis) {
-    if (issue === "Défaite") {
-        return (cote === "Défense") ? 1.0 : 0.0; 
-    }
-    // Cas Victoire
-    if (ennemis === 0) return 0.25; // Malus anti-farm
-    
-    if (cote === "Attaque") {
-        return (ennemis === 4) ? 5.0 : 3.0;
-    } else {
-        return (ennemis === 4) ? 4.0 : 2.0;
-    }
+    if (issue === "Défaite") return (cote === "Défense") ? 1.0 : 0.0; 
+    if (ennemis === 0) return 0.25; 
+    if (cote === "Attaque") return (ennemis === 4) ? 5.0 : 3.0;
+    else return (ennemis === 4) ? 4.0 : 2.0;
 }
 
 async function getLeaderboard(limit = 15) {
@@ -63,7 +58,6 @@ async function getLeaderboard(limit = 15) {
         
         db.all(query, [], (err, rows) => {
             if (err || !rows || rows.length === 0) return resolve("⚠️ Aucune donnée enregistrée.");
-            
             let txt = `\`\`\`\nNom            | Pts   | Atk | Def | Ratio\n--------------------------------------------\n`;
             rows.forEach(r => {
                 const ratio = r.tc > 0 ? ((r.v / r.tc) * 100).toFixed(0) + "%" : "0%";
@@ -71,7 +65,6 @@ async function getLeaderboard(limit = 15) {
                 const pts = (r.p || 0).toFixed(2).padEnd(5);
                 const atk = String(r.n_atk).padEnd(3);
                 const def = String(r.n_def).padEnd(3);
-                
                 txt += `${nom} | ${pts} | ${atk} | ${def} | ${ratio}\n`;
             });
             txt += "```";
@@ -80,21 +73,62 @@ async function getLeaderboard(limit = 15) {
     });
 }
 
+// --- FONCTION DE RESET AUTOMATIQUE ---
+async function checkMonthlyReset() {
+    const mtn = new Date();
+    const moisActuel = `${mtn.getFullYear()}-${mtn.getMonth() + 1}`; // Format "2026-3"
+
+    db.get("SELECT valeur FROM config WHERE cle = 'dernier_reset'", async (err, row) => {
+        if (err) return;
+
+        // Si c'est la première fois ou si le mois enregistré est différent du mois actuel
+        if (!row || row.valeur !== moisActuel) {
+            
+            // 1. On ne reset que si on a des données et que ce n'est pas le tout premier lancement
+            if (row) {
+                const channel = await client.channels.fetch(ID_SALON_ARCHIVE).catch(() => null);
+                if (channel) {
+                    const board = await getLeaderboard(20);
+                    const embed = new EmbedBuilder()
+                        .setTitle(`🏆 CLASSEMENT FINAL - MOIS PRÉCÉDENT`)
+                        .setDescription(board)
+                        .setColor("#f1c40f")
+                        .setTimestamp();
+                    await channel.send({ content: "🏁 **Le mois est terminé ! Voici le récapitulatif final :**", embeds: [embed] });
+                }
+                
+                // 2. On vide la table des attaques
+                db.run("DELETE FROM attaques;");
+                console.log(" [RESET] Base de données réinitialisée pour le nouveau mois.");
+            }
+
+            // 3. Mise à jour du mois dans la config
+            db.run("INSERT OR REPLACE INTO config (cle, valeur) VALUES ('dernier_reset', ?)", [moisActuel]);
+        }
+    });
+}
+
 // --- LOGIQUE DISCORD ---
-client.on('ready', () => console.log(`🚀 Bot Perco V5.2.3 prêt | ${client.user.tag}`));
+client.on('ready', () => {
+    console.log(`🚀 Bot Perco V5.2.3 prêt | ${client.user.tag}`);
+    // Vérifier le reset au démarrage
+    checkMonthlyReset();
+    // Puis vérifier toutes les heures (3600000 ms)
+    setInterval(checkMonthlyReset, 3600000);
+});
+
+// [Le reste de ton code !resultat et interactionCreate reste identique...]
+// --- (Code MessageCreate et InteractionCreate ici) ---
 
 client.on('messageCreate', async (m) => {
     try {
         if (m.author.bot) return;
-
         if (m.content === '!classement') {
             const board = await getLeaderboard(15);
             return m.reply(`🏆 **CLASSEMENT DE LA GUILDE (V5.2)** 🏆\n${board}`);
         }
-
         if (m.content === '!resultat' || m.content === '!resulta') {
             sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false });
-            
             const menu = new ActionRowBuilder().addComponents(
                 new UserSelectMenuBuilder()
                     .setCustomId('u')
@@ -102,7 +136,6 @@ client.on('messageCreate', async (m) => {
                     .setMinValues(1)
                     .setMaxValues(4)
             );
-            
             await m.reply({ content: "⚔️ **Configuration du combat**", components: [menu] });
         }
     } catch (e) { console.error("Erreur MessageCreate:", e); }
@@ -111,9 +144,7 @@ client.on('messageCreate', async (m) => {
 client.on('interactionCreate', async (i) => {
     const s = sessions.get(i.user.id);
     if (!s) return;
-
     try {
-        // ÉTAPE 1 : JOUEURS
         if (i.isUserSelectMenu() && i.customId === 'u') {
             s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
             const r = new ActionRowBuilder().addComponents(
@@ -127,9 +158,7 @@ client.on('interactionCreate', async (i) => {
             );
             return await i.update({ content: "✅ Joueurs enregistrés.\n👉 **De quel côté étiez-vous ?**", components: [r] });
         }
-
         if (i.isStringSelectMenu()) {
-            // ÉTAPE 2 : CÔTÉ
             if (i.customId === 'cote') {
                 s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
                 const r = new ActionRowBuilder().addComponents(
@@ -144,8 +173,6 @@ client.on('interactionCreate', async (i) => {
                 );
                 return await i.update({ content: `Côté : **${s.cote}**\n👉 **Combien d'adversaires y avait-il en face ?**`, components: [r] });
             }
-
-            // ÉTAPE 3 : ENNEMIS
             if (i.customId === 'ennemis') {
                 s.nb_ennemis = parseInt(i.values[0]);
                 const r = new ActionRowBuilder().addComponents(
@@ -155,21 +182,16 @@ client.on('interactionCreate', async (i) => {
                 return await i.update({ content: `Opposition : **${s.nb_ennemis} ennemis**\n👉 **Quel est le verdict final ?**`, components: [r] });
             }
         }
-
-        // ÉTAPE 4 : FINALISATION
         if (i.isButton()) {
             if (s.processing) return;
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             s.processing = true;
-
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
             const stmt = db.prepare(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`);
-            
             db.serialize(() => {
                 s.participants.forEach(p => stmt.run(p.id, p.name, pts, issue, s.cote, s.nb_ennemis));
                 stmt.finalize();
             });
-
             const board = await getLeaderboard(15);
             const embed = new EmbedBuilder()
                 .setTitle("🚨 Résultat de Combat Enregistré")
@@ -177,7 +199,6 @@ client.on('interactionCreate', async (i) => {
                 .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
                 .addFields({ name: "📊 TOP 15 ACTUALISÉ", value: board })
                 .setTimestamp();
-
             await i.update({ content: "✅ **Statistiques synchronisées avec succès.**", components: [], embeds: [embed] });
             sessions.delete(i.user.id);
         }
