@@ -55,6 +55,13 @@ const botGestion = new Client({ intents: [GatewayIntentBits.Guilds, GatewayInten
 const botPerco = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 // --- 5. LOGIQUE GESTION ---
+function calculerPoints(cote, issue, ennemis) {
+    if (issue === "Défaite") return (cote === "Défense") ? 1.0 : 0.0;
+    if (ennemis === 0) return 0.25;
+    if (cote === "Attaque") return (ennemis === 4) ? 5.0 : 3.0;
+    return (ennemis === 4) ? 4.0 : 2.0;
+}
+
 async function getLeaderboard(limit = 15) {
     return new Promise((resolve) => {
         const query = `SELECT joueur_nom, SUM(points) as p, COUNT(*) as total FROM attaques GROUP BY joueur_id ORDER BY p DESC LIMIT ${limit}`;
@@ -74,7 +81,83 @@ async function getLeaderboard(limit = 15) {
 
 botGestion.on('ready', () => console.log(`🚀 Bot Gestion prêt : ${botGestion.user.tag}`));
 
-// ... (Le reste de ta logique botGestion.on messageCreate / interactionCreate est conservé)
+botGestion.on('messageCreate', async (m) => {
+    if (m.author.bot) return;
+    if (m.content === '!top' || m.content === '!classement') {
+        const board = await getLeaderboard(15);
+        return m.reply(`🏆 **TOP 15 ACTUEL**\n${board}`);
+    }
+    if (m.content === '!resultat' || m.content === '!resulta') {
+        const token = `ST-${Date.now()}-${m.author.id}`;
+        sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, token: token });
+        const menu = new ActionRowBuilder().addComponents(
+            new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
+        );
+        await m.reply({ content: "⚔️ **Enregistrement de combat**", components: [menu] });
+    }
+});
+
+botGestion.on('interactionCreate', async (i) => {
+    const s = sessions.get(i.user.id);
+    if (!s) return;
+
+    if (i.isUserSelectMenu() && i.customId === 'u') {
+        s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
+        const r = new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder().setCustomId('cote').setPlaceholder('2. Côté ?')
+            .addOptions([{ label: 'Attaque', value: 'att' }, { label: 'Défense', value: 'def' }])
+        );
+        return await i.update({ content: `✅ **${s.participants.length} joueurs** sélectionnés. 👉 **Côté ?**`, components: [r] });
+    }
+
+    if (i.isStringSelectMenu() && i.customId === 'cote') {
+        s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
+        const r = new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder().setCustomId('ennemis').setPlaceholder('3. Ennemis ?')
+            .addOptions([{ label: '4 (Full)', value: '4' }, { label: '1-3', value: '3' }, { label: '0 (Abandon)', value: '0' }])
+        );
+        return await i.update({ content: `Côté : **${s.cote}**. 👉 **Nombre d'ennemis ?**`, components: [r] });
+    }
+
+    if (i.isStringSelectMenu() && i.customId === 'ennemis') {
+        s.nb_ennemis = parseInt(i.values[0]);
+        const r = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Danger)
+        );
+        return await i.update({ content: `Combat vs **${s.nb_ennemis}**. 👉 **Verdict ?**`, components: [r] });
+    }
+
+    if (i.isButton() && (i.customId === 'win' || i.customId === 'lose')) {
+        if (s.processing) return;
+        s.processing = true;
+        
+        await i.deferUpdate(); 
+        await i.editReply({ content: "⏳ Enregistrement sécurisé en cours...", components: [] });
+
+        const issue = i.customId === 'win' ? "Victoire" : "Défaite";
+        const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
+
+        for (const p of s.participants) {
+            db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES (?,?,?,?,?,?,date('now'),?)`, 
+            [p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token]);
+        }
+
+        setTimeout(async () => {
+            const board = await getLeaderboard(15);
+            const embed = new EmbedBuilder()
+                .setTitle("📝 RÉCAPITULATIF COMBAT")
+                .setDescription(`👥 **Team :** ${s.participants.map(p => p.name).join(', ')}\n⚔️ **Verdict :** ${issue} (${s.cote})\n🎖️ **Gain :** \`+${pts.toFixed(1)} pts\``)
+                .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
+                .addFields({ name: "🏆 CLASSEMENT", value: board });
+
+            await i.editReply({ content: null, embeds: [embed] });
+            const archive = botGestion.channels.cache.get(ID_SALON_ARCHIVE);
+            if (archive) archive.send({ embeds: [embed] }).catch(() => {});
+            sessions.delete(i.user.id);
+        }, 3500); 
+    }
+});
 
 // --- 6. LOGIQUE BOT PERCO (CORRIGÉE) ---
 const percoCommands = [
@@ -93,7 +176,6 @@ botPerco.on('ready', async () => {
 botPerco.on('interactionCreate', async (i) => {
     try {
         if (i.isChatInputCommand()) {
-            // AJOUT : On prévient Discord qu'on traite la demande pour éviter le timeout
             await i.deferReply({ ephemeral: true }); 
 
             if (i.commandName === 'configurer') {
@@ -111,7 +193,6 @@ botPerco.on('interactionCreate', async (i) => {
                 const row = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('alerte_perco').setLabel('Attaque Perco').setEmoji('🚨').setStyle(ButtonStyle.Danger)
                 );
-                // On utilise followUp ou on change le mode de réponse car setup-bouton doit souvent être visible par tous
                 await i.channel.send({ content: '📌 **Bouton d\'alerte actif.**', components: [row] });
                 await i.editReply("Bouton généré.");
             }
