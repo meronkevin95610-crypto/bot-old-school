@@ -3,14 +3,13 @@ const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
 const sqlite3 = require('sqlite3').verbose();
 
 // --- 1. SÉCURITÉ ANTI-DOUBLON D'INSTANCE ---
-// Si Render ou ton PC essaie de fermer l'ancien bot, on s'assure qu'il libère la DB
 process.on('SIGTERM', () => {
     console.log("Fermeture propre de l'instance...");
     db.close();
     process.exit(0);
 });
 
-// --- CONFIGURATION ---
+// --- 2. CONFIGURATION & SERVEUR ---
 const ID_SALON_ARCHIVE = "1477765166467911765"; 
 
 const server = http.createServer((req, res) => {
@@ -18,7 +17,6 @@ const server = http.createServer((req, res) => {
     res.end("Bot Perco V5.3.3 - Operationnel");
 });
 
-// Gestion d'erreur de port pour éviter le crash si doublon
 server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
         console.log('⚠️ Port occupé. Tentative de reconnexion...');
@@ -34,7 +32,7 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
-// --- BASE DE DONNÉES (Mode WAL pour éviter les blocages) ---
+// --- 3. BASE DE DONNÉES (MODE WAL) ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
     db.run("PRAGMA journal_mode = WAL;"); 
@@ -53,7 +51,7 @@ db.serialize(() => {
 
 const sessions = new Map();
 
-// --- CALCULS ---
+// --- 4. LOGIQUE DE CALCUL ---
 function calculerPoints(cote, issue, ennemis) {
     if (issue === "Défaite") return (cote === "Défense") ? 1.0 : 0.0; 
     if (ennemis === 0) return 0.25; 
@@ -61,15 +59,25 @@ function calculerPoints(cote, issue, ennemis) {
     return (ennemis === 4) ? 4.0 : 2.0;
 }
 
-// --- LEADERBOARD SÉCURISÉ ---
+// --- 5. LEADERBOARD DÉTAILLÉ ---
 async function getLeaderboard(limit = 15) {
     return new Promise((resolve) => {
-        const query = `SELECT joueur_nom, SUM(points) as p FROM attaques GROUP BY joueur_id ORDER BY p DESC LIMIT ${limit}`;
+        const query = `SELECT joueur_nom, COUNT(*) as tc,
+                       SUM(CASE WHEN cote='Attaque' THEN 1 ELSE 0 END) as n_atk,
+                       SUM(CASE WHEN cote='Défense' THEN 1 ELSE 0 END) as n_def,
+                       SUM(CASE WHEN issue='Victoire' THEN 1 ELSE 0 END) as v, 
+                       SUM(points) as p FROM attaques GROUP BY joueur_id ORDER BY p DESC LIMIT ${limit}`;
+        
         db.all(query, [], (err, rows) => {
-            if (err || !rows || rows.length === 0) return resolve("Aucune donnée enregistrée.");
-            let txt = "```\nNom            | Pts\n--------------------\n";
+            if (err || !rows || rows.length === 0) return resolve("⚠️ Aucune donnée enregistrée.");
+            let txt = "```\nNom            | Pts   | Atk | Def | %\n---------------------------------------\n";
             rows.forEach(r => {
-                txt += `${(r.joueur_nom || "Inconnu").substring(0, 14).padEnd(14)} | ${(r.p || 0).toFixed(1)}\n`;
+                const ratio = r.tc > 0 ? Math.round((r.v / r.tc) * 100) + "%" : "0%";
+                const nom = (r.joueur_nom || "Inconnu").substring(0, 14).padEnd(14);
+                const pts = (r.p || 0).toFixed(1).padEnd(5);
+                const atk = String(r.n_atk).padEnd(3);
+                const def = String(r.n_def).padEnd(3);
+                txt += `${nom} | ${pts} | ${atk} | ${def} | ${ratio}\n`;
             });
             txt += "```";
             resolve(txt);
@@ -77,9 +85,9 @@ async function getLeaderboard(limit = 15) {
     });
 }
 
-// --- LOGIQUE DU BOT ---
+// --- 6. ÉVÉNEMENTS ---
 client.on('ready', () => {
-    console.log(`🚀 Bot Perco V5.3.3 connecté | ${client.user.tag}`);
+    console.log(`🚀 Bot Perco V5.3.3 prêt | ${client.user.tag}`);
 });
 
 client.on('messageCreate', async (m) => {
@@ -90,23 +98,16 @@ client.on('messageCreate', async (m) => {
         return m.reply(`🏆 **CLASSEMENT ACTUEL**\n${board}`);
     }
 
-    if (m.content === '!resultat') {
-        // Nettoyage de l'ancienne session si elle existe pour cet utilisateur
-        sessions.delete(m.author.id);
-
+    if (m.content === '!resultat' || m.content === '!resulta') {
         const token = `ST-${Date.now()}-${m.author.id}`;
         sessions.set(m.author.id, { 
-            participants: [], 
-            cote: null, 
-            nb_ennemis: 4, 
-            processing: false,
-            token: token 
+            participants: [], cote: null, nb_ennemis: 4, processing: false, token: token 
         });
         
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
         );
-        await m.reply({ content: "⚔️ **Nouvelle saisie lancée.**", components: [menu] });
+        await m.reply({ content: "⚔️ **Configuration du combat**", components: [menu] });
     }
 });
 
@@ -115,14 +116,63 @@ client.on('interactionCreate', async (i) => {
     if (!s) return;
 
     try {
-        // Sélection des joueurs
-        if (i.isUserSelectMenu()) {
+        if (i.isUserSelectMenu() && i.customId === 'u') {
             s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
             const r = new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder().setCustomId('cote').setPlaceholder('Attaque ou Défense ?')
+                new StringSelectMenuBuilder().setCustomId('cote').setPlaceholder('2. Côté ?')
                 .addOptions([{ label: 'Attaque', value: 'att' }, { label: 'Défense', value: 'def' }])
             );
             return await i.update({ content: "✅ Joueurs enregistrés. 👉 **Côté ?**", components: [r] });
         }
 
-        // Sélection Côté
+        if (i.isStringSelectMenu() && i.customId === 'cote') {
+            s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
+            const r = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Danger)
+            );
+            return await i.update({ content: `Côté : **${s.cote}** 👉 **Verdict ?**`, components: [r] });
+        }
+
+        if (i.isButton()) {
+            if (s.processing) return;
+            s.processing = true;
+
+            await i.deferUpdate();
+
+            const issue = i.customId === 'win' ? "Victoire" : "Défaite";
+            const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
+
+            // Insertion SQL avec protection doublon (UNIQUE session_token)
+            const placeholders = s.participants.map(() => "(?, ?, ?, ?, ?, ?, date('now'), ?)").join(', ');
+            const params = [];
+            s.participants.forEach(p => params.push(p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token));
+
+            const sql = `INSERT OR IGNORE INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES ${placeholders}`;
+
+            db.run(sql, params, async function(err) {
+                if (err) console.error("Erreur SQL:", err);
+
+                // Petit délai pour laisser SQLite finir l'écriture avant la lecture
+                setTimeout(async () => {
+                    const board = await getLeaderboard(15);
+                    
+                    const embed = new EmbedBuilder()
+                        .setTitle("🚨 Résultat Enregistré")
+                        .setDescription(`👥 **Joueurs :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n📝 **Action :** ${issue} en ${s.cote}\n🎖️ **Points :** +${pts.toFixed(1)}`)
+                        .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
+                        .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board })
+                        .setTimestamp();
+
+                    await i.editReply({ content: null, components: [], embeds: [embed] });
+                    sessions.delete(i.user.id);
+                }, 300);
+            });
+        }
+    } catch (err) {
+        console.error("Erreur interaction:", err);
+        sessions.delete(i.user.id);
+    }
+});
+
+client.login(process.env.TOKEN);
