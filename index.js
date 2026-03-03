@@ -14,7 +14,7 @@ const ID_SALON_ARCHIVE = "1477765166467911765";
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.3.3 - Operationnel");
+    res.end("Bot Perco V5.3.4 - Operationnel");
 });
 
 server.on('error', (e) => {
@@ -59,7 +59,7 @@ function calculerPoints(cote, issue, ennemis) {
     return (ennemis === 4) ? 4.0 : 2.0;
 }
 
-// --- 5. LEADERBOARD DÉTAILLÉ ---
+// --- 5. LEADERBOARD TOP 15 ---
 async function getLeaderboard(limit = 15) {
     return new Promise((resolve) => {
         const query = `SELECT joueur_nom, COUNT(*) as tc,
@@ -87,7 +87,7 @@ async function getLeaderboard(limit = 15) {
 
 // --- 6. ÉVÉNEMENTS ---
 client.on('ready', () => {
-    console.log(`🚀 Bot Perco V5.3.3 prêt | ${client.user.tag}`);
+    console.log(`🚀 Bot Perco V5.3.4 prêt | ${client.user.tag}`);
 });
 
 client.on('messageCreate', async (m) => {
@@ -143,7 +143,6 @@ client.on('interactionCreate', async (i) => {
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
-            // Insertion SQL avec protection doublon (UNIQUE session_token)
             const placeholders = s.participants.map(() => "(?, ?, ?, ?, ?, ?, date('now'), ?)").join(', ');
             const params = [];
             s.participants.forEach(p => params.push(p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token));
@@ -151,22 +150,36 @@ client.on('interactionCreate', async (i) => {
             const sql = `INSERT OR IGNORE INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES ${placeholders}`;
 
             db.run(sql, params, async function(err) {
-                if (err) console.error("Erreur SQL:", err);
+                if (err) {
+                    console.error("Erreur SQL:", err);
+                    return;
+                }
 
-                // Petit délai pour laisser SQLite finir l'écriture avant la lecture
                 setTimeout(async () => {
                     const board = await getLeaderboard(15);
                     
-                    const embed = new EmbedBuilder()
-                        .setTitle("🚨 Résultat Enregistré")
-                        .setDescription(`👥 **Joueurs :** ${s.participants.map(p => `**${p.name}**`).join(', ')}\n📝 **Action :** ${issue} en ${s.cote}\n🎖️ **Points :** +${pts.toFixed(1)}`)
+                    const recap = [
+                        `👥 **Participants :** ${s.participants.map(p => `**${p.name}**`).join(', ')}`,
+                        `⚔️ **Type :** ${issue} en ${s.cote}`,
+                        `🎖️ **Gain :** \`+${pts.toFixed(1)} points\``
+                    ].join('\n');
+
+                    const finalEmbed = new EmbedBuilder()
+                        .setTitle("📝 RÉCAPITULATIF DU COMBAT")
+                        .setDescription(recap)
                         .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
-                        .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board })
+                        .addFields({ name: "🏆 TOP 15 - CLASSEMENT GÉNÉRAL", value: board })
                         .setTimestamp();
 
-                    await i.editReply({ content: null, components: [], embeds: [embed] });
+                    await i.editReply({ content: null, components: [], embeds: [finalEmbed] });
+
+                    const archiveChannel = client.channels.cache.get(ID_SALON_ARCHIVE);
+                    if (archiveChannel) {
+                        await archiveChannel.send({ embeds: [finalEmbed] }).catch(() => {});
+                    }
+
                     sessions.delete(i.user.id);
-                }, 300);
+                }, 500); 
             });
         }
     } catch (err) {
