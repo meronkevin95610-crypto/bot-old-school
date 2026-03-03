@@ -5,7 +5,7 @@ const sqlite3 = require('sqlite3').verbose();
 // --- CONFIGURATION ---
 const ID_SALON_ARCHIVE = "1477765166467911765"; 
 
-// Serveur HTTP pour Render
+// Serveur HTTP pour Render (Évite le "Port Scan Error")
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end("Bot Perco V5.2.5 - Operationnel");
@@ -23,7 +23,7 @@ process.on('uncaughtException', (err) => console.error(' [ERREUR] Exception non 
 // --- BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
-    db.run("PRAGMA journal_mode = WAL;");
+    db.run("PRAGMA journal_mode = WAL;"); // Performance accrue
     db.run(`CREATE TABLE IF NOT EXISTS attaques (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         joueur_id TEXT,
@@ -72,8 +72,8 @@ async function getLeaderboard(limit = 15) {
     });
 }
 
-// --- FONCTIONS DE RESET ---
-async function executerResetMensuel(messageDeConfirmation = null) {
+// --- FONCTIONS DE RESET (AUTO & MANUEL) ---
+async function executerResetMensuel(interOuMsg = null) {
     const channel = await client.channels.fetch(ID_SALON_ARCHIVE).catch(() => null);
     const board = await getLeaderboard(20);
 
@@ -82,13 +82,16 @@ async function executerResetMensuel(messageDeConfirmation = null) {
             .setTitle(`🏆 ARCHIVES DES STATISTIQUES`)
             .setDescription(board)
             .setColor("#f1c40f")
-            .setFooter({ text: "Réinitialisation mensuelle" })
+            .setFooter({ text: "Réinitialisation système" })
             .setTimestamp();
-        await channel.send({ content: "🏁 **Les statistiques ont été archivées.**", embeds: [embed] });
+        await channel.send({ content: "🏁 **Les statistiques ont été archivées et remises à zéro.**", embeds: [embed] });
     }
 
     db.run("DELETE FROM attaques;");
-    if (messageDeConfirmation) await messageDeConfirmation.reply("✅ Reset effectué et archive envoyée !");
+    if (interOuMsg) {
+        const reply = "✅ **Reset effectué !** Les archives sont dans le salon dédié.";
+        interOuMsg.reply ? interOuMsg.reply(reply) : interOuMsg.channel.send(reply);
+    }
 }
 
 async function checkMonthlyReset() {
@@ -104,59 +107,69 @@ async function checkMonthlyReset() {
     });
 }
 
-// --- LOGIQUE DISCORD ---
+// --- COMMANDES DISCORD ---
 client.on('ready', () => {
-    console.log(`🚀 Bot Perco V5.2.5 prêt | ${client.user.tag}`);
+    console.log(`🚀 Bot Perco V5.2.5 opérationnel | ${client.user.tag}`);
     checkMonthlyReset();
-    setInterval(checkMonthlyReset, 3600000);
+    setInterval(checkMonthlyReset, 3600000); // Check toutes les heures
 });
 
 client.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
-    // Commande de Reset Manuel (Admin)
+    // Reset Manuel (Admin)
     if (m.content === '!forcereset') {
         if (!m.member.permissions.has('Administrator')) return m.reply("❌ Permission refusée.");
         return await executerResetMensuel(m);
     }
 
+    // Affichage Classement
     if (m.content === '!classement') {
         const board = await getLeaderboard(15);
         return m.reply(`🏆 **CLASSEMENT DE LA GUILDE** 🏆\n${board}`);
     }
 
+    // Lancement Procédure Résultat
     if (m.content === '!resultat' || m.content === '!resulta') {
         sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false });
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
         );
-        await m.reply({ content: "⚔️ **Configuration du combat**", components: [menu] });
+        await m.reply({ content: "⚔️ **Enregistrement d'un combat**", components: [menu] });
     }
 });
 
+// --- INTERACTIONS (MENUS & BOUTONS) ---
 client.on('interactionCreate', async (i) => {
     const s = sessions.get(i.user.id);
     if (!s) return;
 
     try {
+        // Sélection des membres
         if (i.isUserSelectMenu() && i.customId === 'u') {
             s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
             const r = new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder().setCustomId('cote').setPlaceholder('2. Côté du combat ?')
                 .addOptions([{ label: 'Attaque', value: 'att' }, { label: 'Défense', value: 'def' }])
             );
-            return await i.update({ content: "✅ Joueurs enregistrés.\n👉 **Côté ?**", components: [r] });
+            return await i.update({ content: "✅ Membres enregistrés.\n👉 **Étiez-vous en Attaque ou Défense ?**", components: [r] });
         }
 
         if (i.isStringSelectMenu()) {
+            // Sélection Côté
             if (i.customId === 'cote') {
                 s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
                 const r = new ActionRowBuilder().addComponents(
-                    new StringSelectMenuBuilder().setCustomId('ennemis').setPlaceholder('3. Ennemis ?')
-                    .addOptions([{ label: '4 Adversaires', value: '4' }, { label: '1-3 Adversaires', value: '1' }, { label: '0 Adversaire', value: '0' }])
+                    new StringSelectMenuBuilder().setCustomId('ennemis').setPlaceholder('3. Nombre d\'ennemis ?')
+                    .addOptions([
+                        { label: '4 Adversaires', value: '4' },
+                        { label: '1-3 Adversaires', value: '1' },
+                        { label: '0 Adversaire (Malus)', value: '0' }
+                    ])
                 );
-                return await i.update({ content: `Côté : **${s.cote}**\n👉 **Combien d'ennemis ?**`, components: [r] });
+                return await i.update({ content: `Côté : **${s.cote}**\n👉 **Combien d'adversaires en face ?**`, components: [r] });
             }
+            // Sélection Nombre Ennemis
             if (i.customId === 'ennemis') {
                 s.nb_ennemis = parseInt(i.values[0]);
                 const r = new ActionRowBuilder().addComponents(
@@ -167,13 +180,15 @@ client.on('interactionCreate', async (i) => {
             }
         }
 
+        // Validation Finale (Boutons)
         if (i.isButton()) {
             if (s.processing) return;
             s.processing = true;
+            
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
-            // On attend la fin de toutes les insertions avant de générer le classement
+            // Insertion en base avec Promesses (Garantit l'affichage du classement après)
             const insertions = s.participants.map(p => {
                 return new Promise((res) => {
                     db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES (?, ?, ?, ?, ?, ?, date('now'))`, 
@@ -185,13 +200,13 @@ client.on('interactionCreate', async (i) => {
 
             const board = await getLeaderboard(15);
             const embed = new EmbedBuilder()
-                .setTitle("🚨 Résultat de Combat Enregistré")
+                .setTitle("🚨 Résultat Enregistré")
                 .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')}\n**${issue}** en **${s.cote}** contre **${s.nb_ennemis}**.\n🎖️ Points : **+${pts.toFixed(2)}**`)
                 .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
                 .addFields({ name: "📊 TOP 15 ACTUALISÉ", value: board })
                 .setTimestamp();
 
-            await i.update({ content: "✅ **Statistiques synchronisées.**", components: [], embeds: [embed] });
+            await i.update({ content: "✅ **Statistiques mises à jour.**", components: [], embeds: [embed] });
             sessions.delete(i.user.id);
         }
     } catch (err) { 
