@@ -2,6 +2,7 @@ const http = require('http');
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder, PermissionFlagsBits, SlashCommandBuilder, Routes } = require('discord.js');
 const { REST } = require('@discordjs/rest');
 const sqlite3 = require('sqlite3').verbose();
+const cron = require('node-cron');
 const fs = require('fs');
 
 // --- 1. CONFIGURATION ---
@@ -18,7 +19,7 @@ if (fs.existsSync('./settings.json')) {
     } catch (e) { console.log("Initialisation settings..."); }
 }
 
-// Serveur Keep-Alive
+// Serveur Keep-Alive pour Render
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end("Système Multi-Bot V6.0 - Gestion & Alerte Perco");
@@ -155,11 +156,10 @@ const percoCommands = [
 botPerco.on('ready', async () => {
     try {
         const rest = new REST({ version: '10' }).setToken(config.tokenPerco);
-        // MODIFICATION ICI : Enregistrement GLOBAL pour éviter le "Missing Access"
         await rest.put(Routes.applicationCommands(config.clientIdPerco), { body: percoCommands });
-        console.log(`✅ Bot Perco prêt : ${botPerco.user.tag} (Commandes Globales enregistrées)`);
+        console.log(`✅ Bot Perco prêt : ${botPerco.user.tag} (Commandes Globales)`);
     } catch (error) {
-        console.error("❌ Erreur enregistrement commandes :", error);
+        console.error("❌ Erreur Slash Commands :", error);
     }
 });
 
@@ -182,10 +182,8 @@ botPerco.on('interactionCreate', async (i) => {
     if (i.isButton() && i.customId === 'alerte_perco') {
         const roleMention = percoSettings.pingRoleId ? `<@&${percoSettings.pingRoleId}>` : "@everyone";
         const msg = `🚨 **ALERTE DÉCLENCHÉE PAR <@${i.user.id}>** 🚨\n\n${roleMention} GO DEF 🔥 Soin / Ero / Bouclier / Placeur 🚨\nS’annoncer en canal guilde, priorité aux optis 🏹`;
-        
         const chan = botPerco.channels.cache.get(percoSettings.mainChannelId);
         if (chan) await chan.send(msg);
-
         const logChan = botPerco.channels.cache.get(percoSettings.logChannelId);
         if (logChan) await logChan.send(`🛡️ **LOG :** **${i.user.tag}** a lancé l'alerte.`);
         await i.reply({ content: 'Alerte envoyée !', ephemeral: true });
