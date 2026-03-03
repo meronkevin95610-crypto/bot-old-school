@@ -172,13 +172,11 @@ client.on('interactionCreate', async (i) => {
             if (s.processing) return;
             s.processing = true;
 
-            // BLOQUE l'interaction pour éviter les clics multiples et les doublons
-            await i.deferUpdate();
+            await i.deferUpdate(); // BLOQUE l'interaction
 
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
-            // --- SYNCHRONISATION SQL ---
             const queries = s.participants.map(p => {
                 return new Promise((res, rej) => {
                     db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES (?, ?, ?, ?, ?, ?, date('now'))`, 
@@ -190,7 +188,7 @@ client.on('interactionCreate', async (i) => {
 
             await Promise.all(queries);
 
-            // Petit délai pour s'assurer que SQLite a fini d'écrire sur le disque
+            // Délai de sécurité pour SQLite
             await new Promise(resolve => setTimeout(resolve, 150));
 
             const board = await getLeaderboard(15);
@@ -202,7 +200,6 @@ client.on('interactionCreate', async (i) => {
                 .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board || "Chargement..." })
                 .setTimestamp();
 
-            // On utilise editReply car le deferUpdate a déjà été fait
             await i.editReply({ content: "✅ Statistiques synchronisées.", components: [], embeds: [embed] });
             sessions.delete(i.user.id);
         }
