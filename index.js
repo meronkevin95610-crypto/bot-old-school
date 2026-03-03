@@ -1,14 +1,14 @@
-﻿const http = require('http');
+const http = require('http');
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
 
 // --- CONFIGURATION ---
 const ID_SALON_ARCHIVE = "1477765166467911765"; 
 
-// Serveur HTTP pour Render (V5.2.7)
+// Serveur HTTP pour Render
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Bot Perco V5.2.7 - Operationnel");
+    res.end("Bot Perco V5.2.8 - Operationnel");
 });
 server.listen(process.env.PORT || 3000, '0.0.0.0');
 
@@ -104,7 +104,7 @@ async function checkMonthlyReset() {
 
 // --- GESTION MESSAGES ---
 client.on('ready', () => {
-    console.log(`🚀 Bot Perco V5.2.7 prêt | ${client.user.tag}`);
+    console.log(`🚀 Bot Perco V5.2.8 prêt | ${client.user.tag}`);
     checkMonthlyReset();
     setInterval(checkMonthlyReset, 3600000);
 });
@@ -130,7 +130,7 @@ client.on('messageCreate', async (m) => {
     }
 });
 
-// --- INTERACTIONS ---
+// --- INTERACTIONS CORRIGÉES ---
 client.on('interactionCreate', async (i) => {
     const s = sessions.get(i.user.id);
     if (!s) return;
@@ -171,32 +171,43 @@ client.on('interactionCreate', async (i) => {
         if (i.isButton()) {
             if (s.processing) return;
             s.processing = true;
+
+            // BLOQUE l'interaction pour éviter les clics multiples et les doublons
+            await i.deferUpdate();
+
             const issue = i.customId === 'win' ? "Victoire" : "Défaite";
             const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
             // --- SYNCHRONISATION SQL ---
             const queries = s.participants.map(p => {
-                return new Promise((res) => {
+                return new Promise((res, rej) => {
                     db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date) VALUES (?, ?, ?, ?, ?, ?, date('now'))`, 
-                    [p.id, p.name, pts, issue, s.cote, s.nb_ennemis], () => res());
+                    [p.id, p.name, pts, issue, s.cote, s.nb_ennemis], (err) => {
+                        if (err) rej(err); else res();
+                    });
                 });
             });
 
-            await Promise.all(queries); // On attend que SQLite confirme l'écriture
+            await Promise.all(queries);
 
-            const board = await getLeaderboard(15); // On lit APRÈS l'écriture
+            // Petit délai pour s'assurer que SQLite a fini d'écrire sur le disque
+            await new Promise(resolve => setTimeout(resolve, 150));
+
+            const board = await getLeaderboard(15);
+            
             const embed = new EmbedBuilder()
                 .setTitle("🚨 Résultat Enregistré")
                 .setDescription(`${s.participants.map(p => `**${p.name}**`).join(', ')}\n**${issue}** en **${s.cote}** contre **${s.nb_ennemis}**.\n🎖️ Points : **+${pts.toFixed(2)}**`)
                 .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
-                .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board })
+                .addFields({ name: "📊 CLASSEMENT MIS À JOUR", value: board || "Chargement..." })
                 .setTimestamp();
 
-            await i.update({ content: "✅ Statistiques synchronisées.", components: [], embeds: [embed] });
+            // On utilise editReply car le deferUpdate a déjà été fait
+            await i.editReply({ content: "✅ Statistiques synchronisées.", components: [], embeds: [embed] });
             sessions.delete(i.user.id);
         }
     } catch (err) { 
-        console.error(err);
+        console.error("Erreur Interaction:", err);
         sessions.delete(i.user.id);
     }
 });
