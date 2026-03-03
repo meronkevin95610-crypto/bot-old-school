@@ -1,4 +1,4 @@
-const http = require('http');
+const http = require('http'); 
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, StringSelectMenuBuilder, PermissionFlagsBits, SlashCommandBuilder, Routes } = require('discord.js');
 const { REST } = require('@discordjs/rest');
 const sqlite3 = require('sqlite3').verbose();
@@ -23,7 +23,8 @@ if (fs.existsSync('./config.json')) {
         tokenGestion: process.env.tokenGestion,
         tokenPerco: process.env.tokenPerco,
         clientIdPerco: process.env.clientIdPerco,
-        guildId: process.env.guildId
+        guildId: process.env.guildId,
+        urlRender: process.env.urlRender // Ajoute l'URL de ton projet Render dans tes variables d'environnement
     };
 }
 
@@ -89,7 +90,7 @@ botGestion.on('messageCreate', async (m) => {
     }
     if (m.content === '!resultat' || m.content === '!resulta') {
         const token = `ST-${Date.now()}-${m.author.id}`;
-        sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, token: token });
+        sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, session_token: token });
         const menu = new ActionRowBuilder().addComponents(
             new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
         );
@@ -133,14 +134,14 @@ botGestion.on('interactionCreate', async (i) => {
         s.processing = true;
         
         await i.deferUpdate(); 
-        await i.editReply({ content: "⏳ Enregistrement sécurisé en cours...", components: [] });
+        await i.editReply({ content: "⏳ Enregistrement sécurisé en cours (3.5s)...", components: [] });
 
         const issue = i.customId === 'win' ? "Victoire" : "Défaite";
         const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
 
         for (const p of s.participants) {
             db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES (?,?,?,?,?,?,date('now'),?)`, 
-            [p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token]);
+            [p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.session_token]);
         }
 
         setTimeout(async () => {
@@ -159,7 +160,7 @@ botGestion.on('interactionCreate', async (i) => {
     }
 });
 
-// --- 6. LOGIQUE BOT PERCO (CORRIGÉE) ---
+// --- 6. LOGIQUE BOT PERCO ---
 const percoCommands = [
     new SlashCommandBuilder().setName('configurer').setDescription('Paramètres alerte').addChannelOption(o => o.setName('general').setDescription('Salon Alerte')).addChannelOption(o => o.setName('logs').setDescription('Salon Logs')).addRoleOption(o => o.setName('role').setDescription('Rôle à pinger')),
     new SlashCommandBuilder().setName('setup-bouton').setDescription('Affiche le bouton d\'alerte')
@@ -213,6 +214,17 @@ botPerco.on('interactionCreate', async (i) => {
     } catch (err) { console.error("Interaction Error:", err); }
 });
 
-// --- 7. CONNEXION ---
+// --- 7. AUTO-PING (Anti-Sommeil) ---
+// Remplace par ton URL Render réelle si elle n'est pas en variable d'environnement
+const URL_PING = config.urlRender || `https://ton-projet.onrender.com`; 
+setInterval(() => {
+    if (!URL_PING.includes("ton-projet")) { // Évite de ping l'URL exemple
+        http.get(URL_PING, (res) => {
+            console.log(`⚓ Auto-ping : Statut ${res.statusCode} - Bot maintenu éveillé.`);
+        }).on('error', (e) => console.error("❌ Erreur Ping:", e.message));
+    }
+}, 8 * 60 * 1000); // Toutes les 8 minutes
+
+// --- 8. CONNEXION ---
 botGestion.login(config.tokenGestion);
 botPerco.login(config.tokenPerco);
