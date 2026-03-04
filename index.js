@@ -22,6 +22,7 @@ const MON_ID = "1364693403971092520";
 // 3. BOT GESTION
 botGestion.on('messageCreate', async (m) => {
     if (m.author.bot) return;
+
     if (m.content === '!top') {
         db.all(`SELECT joueur_nom, SUM(points) as p FROM attaques GROUP BY joueur_nom ORDER BY p DESC LIMIT 15`, (err, rows) => {
             if (err || !rows || rows.length === 0) return m.reply("🏆 Aucun score.");
@@ -30,6 +31,7 @@ botGestion.on('messageCreate', async (m) => {
             m.reply(txt + "```");
         });
     }
+
     if (m.content.startsWith('!add')) {
         if (m.author.id !== MON_ID) return;
         const args = m.content.split(' ');
@@ -55,16 +57,19 @@ botPerco.on('messageCreate', async (m) => {
 botPerco.on('interactionCreate', async (i) => {
     if (!i.isButton()) return;
     if (i.customId === 'alerte_perco') {
-        await i.channel.send(`🚨 **ALERTE PERCO !** @everyone GO DEF 🔥\nPar <@${i.user.id}>`);
-        await i.reply({ content: "Envoyé !", ephemeral: true });
+        try {
+            await i.channel.send(`🚨 **ALERTE PERCO !** @everyone GO DEF 🔥\nPar <@${i.user.id}>`);
+            await i.reply({ content: "Envoyé !", ephemeral: true });
+        } catch (e) {
+            console.error("Erreur alerte:", e);
+        }
     }
 });
 
 botGestion.once('ready', () => console.log("🚀 GESTION OK"));
 botPerco.once('ready', () => console.log("✅ PERCO OK"));
 
-// 5. CONNEXION SÉCURISÉE (Utilise les variables Render)
-// On utilise || pour mettre tes tokens en secours si les variables Render ne marchent pas
+// 5. CONNEXION SÉCURISÉE
 const token1 = process.env.tokenGestion || "MTQ3NjYzMjQ1NTY2OTc0MzY2Ng.GnPfDz.n4YlJ2tSAWat-n8HS1vUBvv2uAx3TdUEFMlWqc";
 const token2 = process.env.tokenPerco || "MTQ3ODU1NDcxMTYwNTkwNzYzMA.GEUFhN.RBzrMxpQaXZmJVhxxYttgYaaB_ijn0QRPplC80";
 
