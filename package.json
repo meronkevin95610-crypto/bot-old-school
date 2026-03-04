@@ -1,17 +1,13 @@
-{
-  "name": "bot-perco-fusion",
-  "version": "6.0.0",
-  "description": "Bot Gestion et Alerte Dofus Touch",
+﻿{
+  "name": "bot-alerte-perco",
+  "version": "1.0.0",
+  "description": "Bot de gestion et d'alerte Dofus",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.25.1",
-    "dotenv": "^16.6.1",
+    "discord.js": "^14.14.1",
     "sqlite3": "^5.1.7"
-  },
-  "engines": {
-    "node": ">=16.0.0"
   }
 }
