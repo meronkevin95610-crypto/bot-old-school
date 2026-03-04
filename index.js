@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const http = require('http');
 const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
 // 1. SERVEUR POUR RENDER (Maintien en ligne)
 http.createServer((req, res) => {
@@ -18,14 +19,18 @@ const intents = [
 const botGestion = new Client({ intents });
 const botPerco = new Client({ intents });
 
-const db = new sqlite3.Database('./stats.db');
+// 3. BASE DE DONNÉES (Configuration pour le DISK Render)
+// On utilise /data/ si on est sur Render, sinon le dossier local
+const dbPath = process.env.RENDER ? '/data/stats.db' : './stats.db';
+const db = new sqlite3.Database(dbPath);
+
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS attaques (id INTEGER PRIMARY KEY AUTOINCREMENT, joueur_nom TEXT, points REAL, date TEXT)`);
 });
 
 const MON_ID = "1364693403971092520";
 
-// 3. LOGIQUE BOT GESTION
+// 4. LOGIQUE BOT GESTION
 botGestion.on('messageCreate', async (m) => {
     if (m.author.bot) return;
 
@@ -50,7 +55,7 @@ botGestion.on('messageCreate', async (m) => {
     }
 });
 
-// 4. LOGIQUE BOT PERCO
+// 5. LOGIQUE BOT PERCO
 botPerco.on('messageCreate', async (m) => {
     if (m.content === '!setup-perco' && m.author.id === MON_ID) {
         const row = new ActionRowBuilder().addComponents(
@@ -60,17 +65,14 @@ botPerco.on('messageCreate', async (m) => {
     }
 });
 
-// CORRECTION : Gestion propre de l'interaction (Bouton)
 botPerco.on('interactionCreate', async (i) => {
     if (!i.isButton()) return;
     if (i.customId === 'alerte_perco') {
         try {
-            // Envoi de l'alerte
             await i.channel.send(`🚨 **ALERTE PERCO !** @everyone GO DEF 🔥\nPar <@${i.user.id}>`);
-            // Confirmation à l'utilisateur
             await i.reply({ content: "Envoyé !", ephemeral: true });
         } catch (e) {
-            console.error("Erreur lors de l'alerte perco:", e);
+            console.error("Erreur alerte:", e);
         }
     }
 });
@@ -78,6 +80,6 @@ botPerco.on('interactionCreate', async (i) => {
 botGestion.once('ready', () => console.log("🚀 GESTION OK"));
 botPerco.once('ready', () => console.log("✅ PERCO OK"));
 
-// 5. CONNEXION SÉCURISÉE (Utilisation des variables Render)
-// On retire les tokens en texte brut pour éviter qu'ils ne soient publics
-botGestion.login(process.env.tokenGestion).catch(
+// 6. CONNEXION SÉCURISÉE
+botGestion.login(process.env.tokenGestion).catch(e => console.error("Erreur GESTION:", e.message));
+botPerco.login(process.env.tokenPerco).catch(e => console.error("Erreur PERCO:", e.message));
