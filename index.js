@@ -1,247 +1,100 @@
+require('dotenv').config();
 const http = require('http');
-const { 
-    Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, 
-    ButtonStyle, EmbedBuilder, UserSelectMenuBuilder, 
-    StringSelectMenuBuilder, PermissionFlagsBits, SlashCommandBuilder, 
-    Routes, AttachmentBuilder 
-} = require('discord.js');
-const { REST } = require('@discordjs/rest');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
-const fs = require('fs');
 
-// --- 1. CONFIGURATION (Hybride JSON / Environnement) ---
-let config = {};
-if (fs.existsSync('./config.json')) {
-    config = require('./config.json');
-} else {
-    config = {
-        tokenGestion: process.env.tokenGestion,
-        tokenPerco: process.env.tokenPerco,
-        clientIdPerco: process.env.clientIdPerco,
-        guildId: process.env.guildId
-    };
-}
+// --- 1. SERVEUR POUR RENDER (Keep-Alive) ---
+http.createServer((req, res) => {
+    res.writeHead(200); res.end("Système Multi-Bot Connecté");
+}).listen(process.env.PORT || 3000);
 
-const ID_SALON_ARCHIVE = "1477765166467911765";
-const ADMIN_ID = "1476632455669743666"; // Ton ID Discord configuré
-
-let percoSettings = { mainChannelId: null, logChannelId: null, pingRoleId: null };
-if (fs.existsSync('./settings.json')) {
-    try {
-        const data = fs.readFileSync('./settings.json', 'utf8');
-        if (data.trim() !== "" && data.trim() !== "{}") {
-            percoSettings = JSON.parse(data);
-        }
-    } catch (e) { console.log("Initialisation settings..."); }
-}
-
-// Serveur Keep-Alive pour Render (Fix Port Binding)
-const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Système Multi-Bot V6.0 - Opérationnel");
-});
-server.listen(process.env.PORT || 3000, '0.0.0.0');
-
-// --- 2. INITIALISATION DES CLIENTS ---
+// --- 2. INITIALISATION DES DEUX BOTS ---
+// Ajout de GuildMembers pour être sûr de bien voir les pseudos
 const botGestion = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const botPerco = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
-// --- 3. BASE DE DONNÉES ---
 const db = new sqlite3.Database('./stats.db');
 db.serialize(() => {
-    db.run("PRAGMA journal_mode = WAL;");
-    db.run(`CREATE TABLE IF NOT EXISTS attaques (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        joueur_id TEXT, joueur_nom TEXT, points REAL, issue TEXT,
-        cote TEXT, nb_ennemis INTEGER, date TEXT, session_token TEXT
-    )`);
+    db.run(`CREATE TABLE IF NOT EXISTS attaques (id INTEGER PRIMARY KEY AUTOINCREMENT, joueur_nom TEXT, points REAL, date TEXT)`);
 });
 
-const sessions = new Map();
-
-// --- 4. FONCTIONS UTILITAIRES ---
-function calculerPoints(cote, issue, ennemis) {
-    if (issue === "Défaite") return (cote === "Défense") ? 1.0 : 0.0;
-    if (ennemis === 0) return 0.25;
-    if (cote === "Attaque") return (ennemis === 4) ? 5.0 : 3.0;
-    return (ennemis === 4) ? 4.0 : 2.0;
-}
-
-async function getLeaderboard(limit = 15) {
-    return new Promise((resolve) => {
-        const query = `SELECT joueur_nom, SUM(points) as p, COUNT(*) as total FROM attaques GROUP BY joueur_id ORDER BY p DESC LIMIT ${limit}`;
-        db.all(query, [], (err, rows) => {
-            if (err || !rows || rows.length === 0) return resolve("⚠️ Aucun score enregistré.");
-            let txt = "```\nNom            | Pts   | Combats\n--------------------------------\n";
-            rows.forEach(r => {
-                const nom = (r.joueur_nom || "Inconnu").substring(0, 14).padEnd(14);
-                const pts = (r.p || 0).toFixed(1).padEnd(5);
-                const count = String(r.total).padEnd(3);
-                txt += `${nom} | ${pts} | ${count}\n`;
-            });
-            resolve(txt + "```");
-        });
-    });
-}
-
-// --- 5. LOGIQUE BOT GESTION ---
-botGestion.on('ready', () => console.log(`🚀 Bot Gestion prêt : ${botGestion.user.tag}`));
-
+// --- 3. LOGIQUE BOT GESTION (Classement) ---
 botGestion.on('messageCreate', async (m) => {
     if (m.author.bot) return;
-
-    if (m.content === '!top' || m.content === '!classement') {
-        const board = await getLeaderboard(15);
-        return m.reply(`🏆 **TOP 15 ACTUEL**\n${board}`);
-    }
-
-    if (m.content === '!resultat' || m.content === '!resulta') {
-        const token = `ST-${Date.now()}-${m.author.id}`;
-        sessions.set(m.author.id, { participants: [], cote: null, nb_ennemis: 4, processing: false, token: token });
-        const menu = new ActionRowBuilder().addComponents(
-            new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('1. Qui a participé ?').setMinValues(1).setMaxValues(4)
-        );
-        await m.reply({ content: "⚔️ **Configuration du combat**", components: [menu] });
-    }
-
-    if (m.content === '!backup-classement') {
-        if (m.author.id !== ADMIN_ID) return m.reply("❌ Permission refusée.");
-        const tempFile = `./backup_${Date.now()}.db`;
-        fs.copyFile('./stats.db', tempFile, async (err) => {
-            if (err) return m.reply("❌ Erreur de sauvegarde.");
-            try {
-                const attachment = new AttachmentBuilder(tempFile);
-                await m.author.send({ content: "📂 Sauvegarde de la base de données :", files: [attachment] });
-                m.reply("✅ Backup envoyé en message privé !");
-            } catch (e) { m.reply("❌ Impossible de vous envoyer un MP."); }
-            finally { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); }
+    
+    if (m.content === '!top') {
+        db.all(`SELECT joueur_nom, SUM(points) as p FROM attaques GROUP BY joueur_nom ORDER BY p DESC LIMIT 15`, (err, rows) => {
+            if (err || !rows || rows.length === 0) return m.reply("🏆 Aucun score pour le moment.");
+            let txt = "🏆 **CLASSEMENT GUILDE**\n```\n";
+            rows.forEach(r => {
+                const nom = (r.joueur_nom || "Inconnu").padEnd(15);
+                const pts = (r.p || 0).toFixed(1);
+                txt += `${nom} | ${pts} pts\n`;
+            });
+            m.reply(txt + "```");
         });
     }
+});
 
-    if (m.content === '!reset-classement') {
-        if (m.author.id !== ADMIN_ID) return m.reply("❌ Permission refusée.");
+botGestion.once('ready', () => {
+    console.log(`🚀 BOT GESTION CONNECTÉ : ${botGestion.user.tag}`);
+});
+
+// --- 4. LOGIQUE BOT PERCO (Alerte) ---
+botPerco.on('messageCreate', async (m) => {
+    // Seul toi (ADMIN_ID) peux configurer le panneau
+    if (m.content === '!setup-perco' && m.author.id === "1476632455669743666") {
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('confirm_reset').setLabel('OUI, EFFACER TOUT').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('cancel_reset').setLabel('ANNULER').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('alerte_perco').setLabel('ALERTE PERCO').setStyle(ButtonStyle.Danger).setEmoji('🚨')
         );
-        await m.reply({ content: "🚨 **ATTENTION** : Voulez-vous vraiment vider tout le classement ?", components: [row] });
-    }
-});
-
-botGestion.on('interactionCreate', async (i) => {
-    if (i.customId === 'confirm_reset') {
-        if (i.user.id !== ADMIN_ID) return i.reply({ content: "❌ Seul l'administrateur peut confirmer.", ephemeral: true });
-        db.serialize(() => {
-            db.run(`DELETE FROM attaques`);
-            db.run(`DELETE FROM sqlite_sequence WHERE name='attaques'`);
+        m.reply({ 
+            content: "📌 **Panneau d'Alerte Perco**\nCliquez sur le bouton ci-dessous pour prévenir la guilde immédiatement.", 
+            components: [row] 
         });
-        return i.update({ content: "✅ Classement réinitialisé avec succès.", components: [] });
     }
-    if (i.customId === 'cancel_reset') {
-        if (i.user.id !== ADMIN_ID) return i.reply({ content: "❌ Action réservée à l'admin.", ephemeral: true });
-        return i.update({ content: "❌ Reset annulé.", components: [] });
-    }
-
-    const s = sessions.get(i.user.id);
-    if (!s) return;
-
-    if (i.isUserSelectMenu() && i.customId === 'u') {
-        s.participants = i.users.map(u => ({ id: u.id, name: u.username }));
-        const r = new ActionRowBuilder().addComponents(
-            new StringSelectMenuBuilder().setCustomId('cote').setPlaceholder('2. Côté ?')
-            .addOptions([{ label: 'Attaque', value: 'att' }, { label: 'Défense', value: 'def' }])
-        );
-        return await i.update({ content: `✅ **${s.participants.length} joueurs** sélectionnés. 👉 **Côté ?**`, components: [r] });
-    }
-
-    if (i.isStringSelectMenu() && i.customId === 'cote') {
-        s.cote = i.values[0] === 'att' ? "Attaque" : "Défense";
-        const r = new ActionRowBuilder().addComponents(
-            new StringSelectMenuBuilder().setCustomId('ennemis').setPlaceholder('3. Ennemis ?')
-            .addOptions([{ label: '4 (Full)', value: '4' }, { label: '1-3', value: '3' }, { label: '0 (Abandon)', value: '0' }])
-        );
-        return await i.update({ content: `Côté : **${s.cote}**. 👉 **Nombre d'ennemis ?**`, components: [r] });
-    }
-
-    if (i.isStringSelectMenu() && i.customId === 'ennemis') {
-        s.nb_ennemis = parseInt(i.values[0]);
-        const r = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('win').setLabel('Victoire').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('lose').setLabel('Défaite').setStyle(ButtonStyle.Danger)
-        );
-        return await i.update({ content: `Combat vs **${s.nb_ennemis}**. 👉 **Verdict ?**`, components: [r] });
-    }
-
-    if (i.isButton() && (i.customId === 'win' || i.customId === 'lose')) {
-        if (s.processing) return;
-        s.processing = true;
-        await i.deferUpdate();
-
-        const issue = i.customId === 'win' ? "Victoire" : "Défaite";
-        const pts = calculerPoints(s.cote, issue, s.nb_ennemis);
-
-        for (const p of s.participants) {
-            db.run(`INSERT INTO attaques (joueur_id, joueur_nom, points, issue, cote, nb_ennemis, date, session_token) VALUES (?,?,?,?,?,?,date('now'),?)`, 
-            [p.id, p.name, pts, issue, s.cote, s.nb_ennemis, s.token]);
-        }
-
-        setTimeout(async () => {
-            const board = await getLeaderboard(15);
-            const embed = new EmbedBuilder()
-                .setTitle("📝 RÉCAPITULATIF COMBAT")
-                .setDescription(`👥 **Team :** ${s.participants.map(p => p.name).join(', ')}\n⚔️ **Verdict :** ${issue} (${s.cote})\n🎖️ **Gain :** \`+${pts.toFixed(1)} pts\``)
-                .setColor(issue === "Victoire" ? "#2ecc71" : "#e74c3c")
-                .addFields({ name: "🏆 CLASSEMENT", value: board });
-
-            await i.editReply({ content: null, components: [], embeds: [embed] });
-            const archive = botGestion.channels.cache.get(ID_SALON_ARCHIVE);
-            if (archive) archive.send({ embeds: [embed] });
-            sessions.delete(i.user.id);
-        }, 1000);
-    }
-});
-
-// --- 6. LOGIQUE BOT PERCO ---
-const percoCommands = [
-    new SlashCommandBuilder().setName('configurer').setDescription('Paramètres alerte').addChannelOption(o => o.setName('general').setDescription('Salon Alerte')).addChannelOption(o => o.setName('logs').setDescription('Salon Logs')).addRoleOption(o => o.setName('role').setDescription('Rôle à pinger')),
-    new SlashCommandBuilder().setName('setup-bouton').setDescription('Affiche le bouton d\'alerte')
-].map(c => c.toJSON());
-
-botPerco.on('ready', async () => {
-    try {
-        const rest = new REST({ version: '10' }).setToken(config.tokenPerco);
-        await rest.put(Routes.applicationCommands(config.clientIdPerco), { body: percoCommands });
-        console.log(`✅ Bot Perco prêt : ${botPerco.user.tag}`);
-    } catch (error) { console.error("Erreur REST Perco:", error); }
 });
 
 botPerco.on('interactionCreate', async (i) => {
-    if (i.isChatInputCommand()) {
-        if (i.commandName === 'configurer') {
-            if (!i.member.permissions.has(PermissionFlagsBits.Administrator)) return i.reply({ content: "Admin requis", ephemeral: true });
-            percoSettings.mainChannelId = i.options.getChannel('general')?.id || percoSettings.mainChannelId;
-            percoSettings.logChannelId = i.options.getChannel('logs')?.id || percoSettings.logChannelId;
-            percoSettings.pingRoleId = i.options.getRole('role')?.id || percoSettings.pingRoleId;
-            fs.writeFileSync('./settings.json', JSON.stringify(percoSettings, null, 2));
-            await i.reply({ content: "✅ Configuration mise à jour !", ephemeral: true });
+    if (!i.isButton()) return;
+    
+    if (i.customId === 'alerte_perco') {
+        try {
+            // Envoie l'alerte dans le salon actuel avec mention @everyone
+            await i.channel.send(`🚨 **ALERTE PERCO !** @everyone GO DEF 🔥\nDéclenchée par <@${i.user.id}>`);
+            // Réponse discrète à celui qui a cliqué
+            await i.reply({ content: "✅ Alerte envoyée avec succès !", ephemeral: true });
+        } catch (error) {
+            console.error("Erreur lors de l'envoi de l'alerte:", error);
+            await i.reply({ content: "❌ Erreur : Je n'ai pas la permission d'écrire ici.", ephemeral: true });
         }
-        if (i.commandName === 'setup-bouton') {
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('alerte_perco').setLabel('Attaque Perco').setEmoji('🚨').setStyle(ButtonStyle.Danger));
-            await i.reply({ content: '📌 **Bouton d\'alerte actif.**', components: [row] });
-        }
-    }
-
-    if (i.isButton() && i.customId === 'alerte_perco') {
-        const roleMention = percoSettings.pingRoleId ? `<@&${percoSettings.pingRoleId}>` : "@everyone";
-        const msg = `🚨 **ALERTE DÉCLENCHÉE PAR <@${i.user.id}>** 🚨\n\n${roleMention} GO DEF 🔥 Soin / Ero / Bouclier / Placeur 🚨\nS’annoncer en canal guilde, priorité aux optis 🏹`;
-        const chan = botPerco.channels.cache.get(percoSettings.mainChannelId);
-        if (chan) await chan.send(msg);
-        const logChan = botPerco.channels.cache.get(percoSettings.logChannelId);
-        if (logChan) await logChan.send(`🛡️ **LOG :** **${i.user.tag}** a lancé l'alerte.`);
-        await i.reply({ content: 'Alerte envoyée !', ephemeral: true });
     }
 });
 
-// --- 7. CONNEXION ---
-botGestion.login(config.tokenGestion);
-botPerco.login(config.tokenPerco);
+botPerco.once('ready', () => {
+    console.log(`✅ BOT PERCO CONNECTÉ : ${botPerco.user.tag}`);
+});
+
+// --- 5. CONNEXION SÉCURISÉE DES DEUX BOTS ---
+const startBots = async () => {
+    console.log("Démarrage de la connexion...");
+
+    // Connexion du bot GESTION
+    if (process.env.tokenGestion) {
+        botGestion.login(process.env.tokenGestion).catch(e => {
+            console.error("❌ Erreur de Token pour GESTION (tokenGestion):", e.message);
+        });
+    } else {
+        console.log("⚠️ Variable 'tokenGestion' manquante dans l'environnement.");
+    }
+
+    // Connexion du bot PERCO
+    if (process.env.tokenPerco) {
+        botPerco.login(process.env.tokenPerco).catch(e => {
+            console.error("❌ Erreur de Token pour PERCO (tokenPerco):", e.message);
+        });
+    } else {
+        console.log("⚠️ Variable 'tokenPerco' manquante dans l'environnement.");
+    }
+};
+
+startBots();
